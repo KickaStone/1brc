@@ -1,0 +1,6 @@
+/bin
+/dataset/*.txt
+/.vscode
+/.idea
+/FlameGraph
+/1brc
