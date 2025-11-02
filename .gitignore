@@ -4,3 +4,7 @@
 /.idea
 /FlameGraph
 /1brc
+/output
+
+.gdb_history
+perf*

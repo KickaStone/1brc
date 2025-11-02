@@ -6,6 +6,13 @@ https://1brc.dev
 [github]https://github.com/gunnarmorling/1brc
 仓库issue里可以找到数据库生成代码。
 
+
+## baseline
+
+没有任何优化 5m52s
+编译器选项 -O3 -march=native -g0 -DNDEBUG -fomit-frame-pointer 3m0.391s
+
+
 ## 先看看用cpp fstream读要多久
 
 fstream 似乎不太占用内存。
@@ -47,15 +54,14 @@ Time taken: 238642 milliseconds
 使用CLion的profiler工具进行性能分析，发现单线程主要的瓶颈点在哈希表的读取上。
 
 
-## fstream-multi
+## 访存优化
 
 每个线程分配一个map，主线程最后汇总各map数据。
 每个map 提前reserve(1000)减少扩容消耗。 
 该[版本](./fstream-multi.cpp)多线程9分46秒完成. 性能分析发现哈希表已经不再是最主要的瓶颈，fstream的锁反而是瓶颈了。
 火焰图如下：
 ![](./img/fstream-muilti.png)
-由于多个线程同时要读取ifstream，但文件流不是线程安全的，所以下一步应该是优化文件IO.
-
+由于多个线程同时要读取ifstream，但文件流不是线程安全的，多个线程共享ifsteam需要加锁，因此会有开销，这里可以选择使用mmap优化文件读取.
 
 mmap是一个能将文件映射到虚拟内存，从而用指针直接访问的api。
 
@@ -78,6 +84,8 @@ offset：指定要映射的文件的偏移量。
 */
 ```
 
+这里prot设置为PROT_READ，flag应该设置MAP_PRIVATE，只读文件，且不与其他进程共享。
+
 现在的思路是：将文件mmap到内存中，多个线程同时在文件的不同位置开始处理。这样可以避免fstream的锁竞争问题，因为fstream目前只能从一个起点开始。不过有几个问题要搞清楚：
 
 1. 文件映射到内存后，是不是真的已经在物理内存中了，还是会通过缺页再去加载？
@@ -95,7 +103,53 @@ offset：指定要映射的文件的偏移量。
 
 ![](./img/mmap-multi.svg)
 
-## map优化？
+## hash表使用优化和double优化
+
+### hash表优化 
+优化程序的很重要的一条就是减少copy次数。在原有的程序中，在unordered_map的使用上有问题。
+
+```c++
+if (stations.find(name) == stations.end()) {
+    stations[name] = WeatherStation();
+}
+stations[name].cnt += 1;
+stations[name].id = name;
+stations[name].totalTemp += t;
+stations[name].maxTemp = max(stations[name].maxTemp, t);
+stations[name].minTemp = min(stations[name].minTemp, t);
+```
+
+优化版：
+
+```c++
+auto [it, inserted] = stations.try_emplace(string(buf));
+auto& st = it->second;
+st.cnt += 1;
+st.totalTemp += t;
+st.maxTemp = std::max(st.maxTemp, t);
+st.minTemp = std::min(st.minTemp, t);
+++k;
+```
+
+其中主要的优化在使用`try_emplace`减少哈希查找次数, 旧版本`stations[name]`每次都会产生一次查找，性能较低。
+
+### 数据类型优化
+
+原始使用`atof`函数转换字符数组为double类型，但计算机浮点运算速度要比整数运算慢很多（因为浮点数表示复杂、需要特殊指令和运算单元FPU），同时这里的数据都是小数点后1位，可以直接转换成整数，输出结果乘0.1即可。（需要注意负号）
+
+完整的代码在[mmap-multi3.cpp](./mmap-multi3.cpp)
+
+优化后性能又一次明显提高到`0m23.417s`.
+
+火焰图
+![](./img/mmap-multi3.svg)
+
+
+仍然存在的问题：
+1. 哈希表的[]运算符开销比较大
+2. 各个线程结束时间不同，有的线程很快就完成然后空闲。
+
+## map优化【正确性待定】
 
 再会看代码发现哈希表的使用是无意义的。最后要得到的数据是有序的，也就是说还要把存储在哈希表里的数据赋值到map里，hash表只起到一个收集数据的作用，但它引入的开销确非常大。
 

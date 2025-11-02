@@ -1,5 +1,5 @@
 CXX=g++
-CXXFLAGS=-std=c++17 -O2 -Wall -Wextra -Werror -g
+CXXFLAGS=-std=c++17 -Wall -Wextra -Werror -g0
 OUTDIR=bin
 
 # Get all .cpp files in the current directory

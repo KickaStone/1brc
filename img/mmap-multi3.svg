@@ -1,0 +1,1354 @@
+<?xml version="1.0" standalone="no"?>
+<!DOCTYPE svg PUBLIC "-//W3C//DTD SVG 1.1//EN" "http://www.w3.org/Graphics/SVG/1.1/DTD/svg11.dtd">
+<svg version="1.1" width="1200" height="470" onload="init(evt)" viewBox="0 0 1200 470" xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink">
+<!-- Flame graph stack visualization. See https://github.com/brendangregg/FlameGraph for latest version, and http://www.brendangregg.com/flamegraphs.html for examples. -->
+<!-- NOTES:  -->
+<defs>
+	<linearGradient id="background" y1="0" y2="1" x1="0" x2="0" >
+		<stop stop-color="#eeeeee" offset="5%" />
+		<stop stop-color="#eeeeb0" offset="95%" />
+	</linearGradient>
+</defs>
+<style type="text/css">
+	text { font-family:Verdana; font-size:12px; fill:rgb(0,0,0); }
+	#search, #ignorecase { opacity:0.1; cursor:pointer; }
+	#search:hover, #search.show, #ignorecase:hover, #ignorecase.show { opacity:1; }
+	#subtitle { text-anchor:middle; font-color:rgb(160,160,160); }
+	#title { text-anchor:middle; font-size:17px}
+	#unzoom { cursor:pointer; }
+	#frames > *:hover { stroke:black; stroke-width:0.5; cursor:pointer; }
+	.hide { display:none; }
+	.parent { opacity:0.5; }
+</style>
+<script type="text/ecmascript">
+<![CDATA[
+	"use strict";
+	var details, searchbtn, unzoombtn, matchedtxt, svg, searching, currentSearchTerm, ignorecase, ignorecaseBtn;
+	function init(evt) {
+		details = document.getElementById("details").firstChild;
+		searchbtn = document.getElementById("search");
+		ignorecaseBtn = document.getElementById("ignorecase");
+		unzoombtn = document.getElementById("unzoom");
+		matchedtxt = document.getElementById("matched");
+		svg = document.getElementsByTagName("svg")[0];
+		searching = 0;
+		currentSearchTerm = null;
+
+		// use GET parameters to restore a flamegraphs state.
+		var params = get_params();
+		if (params.x && params.y)
+			zoom(find_group(document.querySelector('[x="' + params.x + '"][y="' + params.y + '"]')));
+                if (params.s) search(params.s);
+	}
+
+	// event listeners
+	window.addEventListener("click", function(e) {
+		var target = find_group(e.target);
+		if (target) {
+			if (target.nodeName == "a") {
+				if (e.ctrlKey === false) return;
+				e.preventDefault();
+			}
+			if (target.classList.contains("parent")) unzoom(true);
+			zoom(target);
+			if (!document.querySelector('.parent')) {
+				// we have basically done a clearzoom so clear the url
+				var params = get_params();
+				if (params.x) delete params.x;
+				if (params.y) delete params.y;
+				history.replaceState(null, null, parse_params(params));
+				unzoombtn.classList.add("hide");
+				return;
+			}
+
+			// set parameters for zoom state
+			var el = target.querySelector("rect");
+			if (el && el.attributes && el.attributes.y && el.attributes._orig_x) {
+				var params = get_params()
+				params.x = el.attributes._orig_x.value;
+				params.y = el.attributes.y.value;
+				history.replaceState(null, null, parse_params(params));
+			}
+		}
+		else if (e.target.id == "unzoom") clearzoom();
+		else if (e.target.id == "search") search_prompt();
+		else if (e.target.id == "ignorecase") toggle_ignorecase();
+	}, false)
+
+	// mouse-over for info
+	// show
+	window.addEventListener("mouseover", function(e) {
+		var target = find_group(e.target);
+		if (target) details.nodeValue = "Function: " + g_to_text(target);
+	}, false)
+
+	// clear
+	window.addEventListener("mouseout", function(e) {
+		var target = find_group(e.target);
+		if (target) details.nodeValue = ' ';
+	}, false)
+
+	// ctrl-F for search
+	// ctrl-I to toggle case-sensitive search
+	window.addEventListener("keydown",function (e) {
+		if (e.keyCode === 114 || (e.ctrlKey && e.keyCode === 70)) {
+			e.preventDefault();
+			search_prompt();
+		}
+		else if (e.ctrlKey && e.keyCode === 73) {
+			e.preventDefault();
+			toggle_ignorecase();
+		}
+	}, false)
+
+	// functions
+	function get_params() {
+		var params = {};
+		var paramsarr = window.location.search.substr(1).split('&');
+		for (var i = 0; i < paramsarr.length; ++i) {
+			var tmp = paramsarr[i].split("=");
+			if (!tmp[0] || !tmp[1]) continue;
+			params[tmp[0]]  = decodeURIComponent(tmp[1]);
+		}
+		return params;
+	}
+	function parse_params(params) {
+		var uri = "?";
+		for (var key in params) {
+			uri += key + '=' + encodeURIComponent(params[key]) + '&';
+		}
+		if (uri.slice(-1) == "&")
+			uri = uri.substring(0, uri.length - 1);
+		if (uri == '?')
+			uri = window.location.href.split('?')[0];
+		return uri;
+	}
+	function find_child(node, selector) {
+		var children = node.querySelectorAll(selector);
+		if (children.length) return children[0];
+	}
+	function find_group(node) {
+		var parent = node.parentElement;
+		if (!parent) return;
+		if (parent.id == "frames") return node;
+		return find_group(parent);
+	}
+	function orig_save(e, attr, val) {
+		if (e.attributes["_orig_" + attr] != undefined) return;
+		if (e.attributes[attr] == undefined) return;
+		if (val == undefined) val = e.attributes[attr].value;
+		e.setAttribute("_orig_" + attr, val);
+	}
+	function orig_load(e, attr) {
+		if (e.attributes["_orig_"+attr] == undefined) return;
+		e.attributes[attr].value = e.attributes["_orig_" + attr].value;
+		e.removeAttribute("_orig_"+attr);
+	}
+	function g_to_text(e) {
+		var text = find_child(e, "title").firstChild.nodeValue;
+		return (text)
+	}
+	function g_to_func(e) {
+		var func = g_to_text(e);
+		// if there's any manipulation we want to do to the function
+		// name before it's searched, do it here before returning.
+		return (func);
+	}
+	function update_text(e) {
+		var r = find_child(e, "rect");
+		var t = find_child(e, "text");
+		var w = parseFloat(r.attributes.width.value) -3;
+		var txt = find_child(e, "title").textContent.replace(/\([^(]*\)$/,"");
+		t.attributes.x.value = parseFloat(r.attributes.x.value) + 3;
+
+		// Smaller than this size won't fit anything
+		if (w < 2 * 12 * 0.59) {
+			t.textContent = "";
+			return;
+		}
+
+		t.textContent = txt;
+		var sl = t.getSubStringLength(0, txt.length);
+		// check if only whitespace or if we can fit the entire string into width w
+		if (/^ *$/.test(txt) || sl < w)
+			return;
+
+		// this isn't perfect, but gives a good starting point
+		// and avoids calling getSubStringLength too often
+		var start = Math.floor((w/sl) * txt.length);
+		for (var x = start; x > 0; x = x-2) {
+			if (t.getSubStringLength(0, x + 2) <= w) {
+				t.textContent = txt.substring(0, x) + "..";
+				return;
+			}
+		}
+		t.textContent = "";
+	}
+
+	// zoom
+	function zoom_reset(e) {
+		if (e.attributes != undefined) {
+			orig_load(e, "x");
+			orig_load(e, "width");
+		}
+		if (e.childNodes == undefined) return;
+		for (var i = 0, c = e.childNodes; i < c.length; i++) {
+			zoom_reset(c[i]);
+		}
+	}
+	function zoom_child(e, x, ratio) {
+		if (e.attributes != undefined) {
+			if (e.attributes.x != undefined) {
+				orig_save(e, "x");
+				e.attributes.x.value = (parseFloat(e.attributes.x.value) - x - 10) * ratio + 10;
+				if (e.tagName == "text")
+					e.attributes.x.value = find_child(e.parentNode, "rect[x]").attributes.x.value + 3;
+			}
+			if (e.attributes.width != undefined) {
+				orig_save(e, "width");
+				e.attributes.width.value = parseFloat(e.attributes.width.value) * ratio;
+			}
+		}
+
+		if (e.childNodes == undefined) return;
+		for (var i = 0, c = e.childNodes; i < c.length; i++) {
+			zoom_child(c[i], x - 10, ratio);
+		}
+	}
+	function zoom_parent(e) {
+		if (e.attributes) {
+			if (e.attributes.x != undefined) {
+				orig_save(e, "x");
+				e.attributes.x.value = 10;
+			}
+			if (e.attributes.width != undefined) {
+				orig_save(e, "width");
+				e.attributes.width.value = parseInt(svg.width.baseVal.value) - (10 * 2);
+			}
+		}
+		if (e.childNodes == undefined) return;
+		for (var i = 0, c = e.childNodes; i < c.length; i++) {
+			zoom_parent(c[i]);
+		}
+	}
+	function zoom(node) {
+		var attr = find_child(node, "rect").attributes;
+		var width = parseFloat(attr.width.value);
+		var xmin = parseFloat(attr.x.value);
+		var xmax = parseFloat(xmin + width);
+		var ymin = parseFloat(attr.y.value);
+		var ratio = (svg.width.baseVal.value - 2 * 10) / width;
+
+		// XXX: Workaround for JavaScript float issues (fix me)
+		var fudge = 0.0001;
+
+		unzoombtn.classList.remove("hide");
+
+		var el = document.getElementById("frames").children;
+		for (var i = 0; i < el.length; i++) {
+			var e = el[i];
+			var a = find_child(e, "rect").attributes;
+			var ex = parseFloat(a.x.value);
+			var ew = parseFloat(a.width.value);
+			var upstack;
+			// Is it an ancestor
+			if (0 == 0) {
+				upstack = parseFloat(a.y.value) > ymin;
+			} else {
+				upstack = parseFloat(a.y.value) < ymin;
+			}
+			if (upstack) {
+				// Direct ancestor
+				if (ex <= xmin && (ex+ew+fudge) >= xmax) {
+					e.classList.add("parent");
+					zoom_parent(e);
+					update_text(e);
+				}
+				// not in current path
+				else
+					e.classList.add("hide");
+			}
+			// Children maybe
+			else {
+				// no common path
+				if (ex < xmin || ex + fudge >= xmax) {
+					e.classList.add("hide");
+				}
+				else {
+					zoom_child(e, xmin, ratio);
+					update_text(e);
+				}
+			}
+		}
+		search();
+	}
+	function unzoom(dont_update_text) {
+		unzoombtn.classList.add("hide");
+		var el = document.getElementById("frames").children;
+		for(var i = 0; i < el.length; i++) {
+			el[i].classList.remove("parent");
+			el[i].classList.remove("hide");
+			zoom_reset(el[i]);
+			if(!dont_update_text) update_text(el[i]);
+		}
+		search();
+	}
+	function clearzoom() {
+		unzoom();
+
+		// remove zoom state
+		var params = get_params();
+		if (params.x) delete params.x;
+		if (params.y) delete params.y;
+		history.replaceState(null, null, parse_params(params));
+	}
+
+	// search
+	function toggle_ignorecase() {
+		ignorecase = !ignorecase;
+		if (ignorecase) {
+			ignorecaseBtn.classList.add("show");
+		} else {
+			ignorecaseBtn.classList.remove("show");
+		}
+		reset_search();
+		search();
+	}
+	function reset_search() {
+		var el = document.querySelectorAll("#frames rect");
+		for (var i = 0; i < el.length; i++) {
+			orig_load(el[i], "fill")
+		}
+		var params = get_params();
+		delete params.s;
+		history.replaceState(null, null, parse_params(params));
+	}
+	function search_prompt() {
+		if (!searching) {
+			var term = prompt("Enter a search term (regexp " +
+			    "allowed, eg: ^ext4_)"
+			    + (ignorecase ? ", ignoring case" : "")
+			    + "\nPress Ctrl-i to toggle case sensitivity", "");
+			if (term != null) search(term);
+		} else {
+			reset_search();
+			searching = 0;
+			currentSearchTerm = null;
+			searchbtn.classList.remove("show");
+			searchbtn.firstChild.nodeValue = "Search"
+			matchedtxt.classList.add("hide");
+			matchedtxt.firstChild.nodeValue = ""
+		}
+	}
+	function search(term) {
+		if (term) currentSearchTerm = term;
+		if (currentSearchTerm === null) return;
+
+		var re = new RegExp(currentSearchTerm, ignorecase ? 'i' : '');
+		var el = document.getElementById("frames").children;
+		var matches = new Object();
+		var maxwidth = 0;
+		for (var i = 0; i < el.length; i++) {
+			var e = el[i];
+			var func = g_to_func(e);
+			var rect = find_child(e, "rect");
+			if (func == null || rect == null)
+				continue;
+
+			// Save max width. Only works as we have a root frame
+			var w = parseFloat(rect.attributes.width.value);
+			if (w > maxwidth)
+				maxwidth = w;
+
+			if (func.match(re)) {
+				// highlight
+				var x = parseFloat(rect.attributes.x.value);
+				orig_save(rect, "fill");
+				rect.attributes.fill.value = "rgb(230,0,230)";
+
+				// remember matches
+				if (matches[x] == undefined) {
+					matches[x] = w;
+				} else {
+					if (w > matches[x]) {
+						// overwrite with parent
+						matches[x] = w;
+					}
+				}
+				searching = 1;
+			}
+		}
+		if (!searching)
+			return;
+		var params = get_params();
+		params.s = currentSearchTerm;
+		history.replaceState(null, null, parse_params(params));
+
+		searchbtn.classList.add("show");
+		searchbtn.firstChild.nodeValue = "Reset Search";
+
+		// calculate percent matched, excluding vertical overlap
+		var count = 0;
+		var lastx = -1;
+		var lastw = 0;
+		var keys = Array();
+		for (k in matches) {
+			if (matches.hasOwnProperty(k))
+				keys.push(k);
+		}
+		// sort the matched frames by their x location
+		// ascending, then width descending
+		keys.sort(function(a, b){
+			return a - b;
+		});
+		// Step through frames saving only the biggest bottom-up frames
+		// thanks to the sort order. This relies on the tree property
+		// where children are always smaller than their parents.
+		var fudge = 0.0001;	// JavaScript floating point
+		for (var k in keys) {
+			var x = parseFloat(keys[k]);
+			var w = matches[keys[k]];
+			if (x >= lastx + lastw - fudge) {
+				count += w;
+				lastx = x;
+				lastw = w;
+			}
+		}
+		// display matched percent
+		matchedtxt.classList.remove("hide");
+		var pct = 100 * count / maxwidth;
+		if (pct != 100) pct = pct.toFixed(1)
+		matchedtxt.firstChild.nodeValue = "Matched: " + pct + "%";
+	}
+]]>
+</script>
+<rect x="0.0" y="0" width="1200.0" height="470.0" fill="url(#background)"  />
+<text id="title" x="600.00" y="24" >Flame Graph</text>
+<text id="details" x="10.00" y="453" > </text>
+<text id="unzoom" x="10.00" y="24" class="hide">Reset Zoom</text>
+<text id="search" x="1090.00" y="24" >Search</text>
+<text id="ignorecase" x="1174.00" y="24" >ic</text>
+<text id="matched" x="1090.00" y="453" > </text>
+<g id="frames">
+<g >
+<title>std::__detail::_Node_iterator&lt;std::pair&lt;std::__cxx11::basic_string&lt;char, std::char_traits&lt;char&gt;, std::allocator&lt;char&gt; &gt; const, WeatherStation&gt;, false, true&gt;&amp;&amp; std::forward&lt;std::__detail::_Node_iterator&lt;std::pair&lt;std::__cxx11::basic_string&lt;char, std::char_traits&lt;char&gt;, std::allocator&lt;char&gt; &gt; const, WeatherStation&gt;, false, true&gt; &gt; (1,442,813,527 samples, 0.13%)</title><rect x="1133.7" y="229" width="1.5" height="15.0" fill="rgb(242,173,41)" rx="2" ry="2" />
+<text  x="1136.67" y="239.5" ></text>
+</g>
+<g >
+<title>folio_add_file_rmap_ptes (522,108,827 samples, 0.05%)</title><rect x="334.4" y="85" width="0.5" height="15.0" fill="rgb(225,92,22)" rx="2" ry="2" />
+<text  x="337.38" y="95.5" ></text>
+</g>
+<g >
+<title>std::__cxx11::basic_string&lt;char, std::char_traits&lt;char&gt;, std::allocator&lt;char&gt; &gt;::~basic_string (5,584,780,541 samples, 0.49%)</title><rect x="1167.0" y="261" width="5.8" height="15.0" fill="rgb(248,201,48)" rx="2" ry="2" />
+<text  x="1170.02" y="271.5" ></text>
+</g>
+<g >
+<title>std::__cxx11::basic_string&lt;char, std::char_traits&lt;char&gt;, std::allocator&lt;char&gt; &gt;::_M_data (5,924,799,986 samples, 0.52%)</title><rect x="405.6" y="229" width="6.2" height="15.0" fill="rgb(206,6,1)" rx="2" ry="2" />
+<text  x="408.65" y="239.5" ></text>
+</g>
+<g >
+<title>bool&amp;&amp; std::forward&lt;bool&gt; (2,988,580,600 samples, 0.26%)</title><rect x="1067.1" y="197" width="3.1" height="15.0" fill="rgb(220,70,16)" rx="2" ry="2" />
+<text  x="1070.10" y="207.5" ></text>
+</g>
+<g >
+<title>main::{lambda (1,101,394,751,639 samples, 97.10%)</title><rect x="17.4" y="261" width="1145.8" height="15.0" fill="rgb(215,50,12)" rx="2" ry="2" />
+<text  x="20.45" y="271.5" >main::{lambda</text>
+</g>
+<g >
+<title>std::__is_constant_evaluated (648,953,177 samples, 0.06%)</title><rect x="428.4" y="213" width="0.7" height="15.0" fill="rgb(234,137,32)" rx="2" ry="2" />
+<text  x="431.44" y="223.5" ></text>
+</g>
+<g >
+<title>hrtimer_interrupt (162,192,033 samples, 0.01%)</title><rect x="602.3" y="165" width="0.2" height="15.0" fill="rgb(228,109,26)" rx="2" ry="2" />
+<text  x="605.33" y="175.5" ></text>
+</g>
+<g >
+<title>std::_Hashtable&lt;std::__cxx11::basic_string&lt;char, std::char_traits&lt;char&gt;, std::allocator&lt;char&gt; &gt;, std::pair&lt;std::__cxx11::basic_string&lt;char, std::char_traits&lt;char&gt;, std::allocator&lt;char&gt; &gt; const, WeatherStation&gt;, std::allocator&lt;std::pair&lt;std::__cxx11::basic_string&lt;char, std::char_traits&lt;char&gt;, std::allocator&lt;char&gt; &gt; const, WeatherStation&gt; &gt;, std::__detail::_Select1st, std::equal_to&lt;std::__cxx11::basic_string&lt;char, std::char_traits&lt;char&gt;, std::allocator&lt;char&gt; &gt; &gt;, std::hash&lt;std::__cxx11::basic_string&lt;char, std::char_traits&lt;char&gt;, std::allocator&lt;char&gt; &gt; &gt;, std::__detail::_Mod_range_hashing, std::__detail::_Default_ranged_hash, std::__detail::_Prime_rehash_policy, std::__detail::_Hashtable_traits&lt;true, false, true&gt; &gt;::_M_find_node (270,009,152,828 samples, 23.80%)</title><rect x="649.8" y="213" width="280.9" height="15.0" fill="rgb(223,87,20)" rx="2" ry="2" />
+<text  x="652.77" y="223.5" >std::_Hashtable&lt;std::__cxx11::basic_s..</text>
+</g>
+<g >
+<title>std::__cxx11::basic_string&lt;char, std::char_traits&lt;char&gt;, std::allocator&lt;char&gt; &gt;::basic_string&lt;std::allocator&lt;char&gt; &gt; (108,178,601,747 samples, 9.54%)</title><rect x="359.3" y="245" width="112.5" height="15.0" fill="rgb(209,22,5)" rx="2" ry="2" />
+<text  x="362.25" y="255.5" >std::__cxx11:..</text>
+</g>
+<g >
+<title>void std::__cxx11::basic_string&lt;char, std::char_traits&lt;char&gt;, std::allocator&lt;char&gt; &gt;::_M_construct&lt;char const*&gt; (40,057,586,138 samples, 3.53%)</title><rect x="430.1" y="229" width="41.7" height="15.0" fill="rgb(254,226,54)" rx="2" ry="2" />
+<text  x="433.12" y="239.5" >voi..</text>
+</g>
+<g >
+<title>cfree@GLIBC_2.2.5 (1,189,649,816 samples, 0.10%)</title><rect x="338.8" y="245" width="1.3" height="15.0" fill="rgb(233,131,31)" rx="2" ry="2" />
+<text  x="341.82" y="255.5" ></text>
+</g>
+<g >
+<title>__hrtimer_run_queues (720,927,315 samples, 0.06%)</title><rect x="335.4" y="181" width="0.8" height="15.0" fill="rgb(237,150,35)" rx="2" ry="2" />
+<text  x="338.42" y="191.5" ></text>
+</g>
+<g >
+<title>__x64_sys_munmap (1,126,028,834 samples, 0.10%)</title><rect x="10.1" y="277" width="1.1" height="15.0" fill="rgb(206,7,1)" rx="2" ry="2" />
+<text  x="13.06" y="287.5" ></text>
+</g>
+<g >
+<title>tick_nohz_handler (684,896,521 samples, 0.06%)</title><rect x="335.5" y="165" width="0.7" height="15.0" fill="rgb(248,200,48)" rx="2" ry="2" />
+<text  x="338.46" y="175.5" ></text>
+</g>
+<g >
+<title>std::__cxx11::basic_string&lt;char, std::char_traits&lt;char&gt;, std::allocator&lt;char&gt; &gt;::data (4,499,866,197 samples, 0.40%)</title><rect x="949.3" y="197" width="4.7" height="15.0" fill="rgb(231,120,28)" rx="2" ry="2" />
+<text  x="952.33" y="207.5" ></text>
+</g>
+<g >
+<title>std::__detail::_Node_iterator_base&lt;std::pair&lt;std::__cxx11::basic_string&lt;char, std::char_traits&lt;char&gt;, std::allocator&lt;char&gt; &gt; const, WeatherStation&gt;, true&gt;::_Node_iterator_base (2,539,351,429 samples, 0.22%)</title><rect x="1046.5" y="213" width="2.6" height="15.0" fill="rgb(253,221,53)" rx="2" ry="2" />
+<text  x="1049.48" y="223.5" ></text>
+</g>
+<g >
+<title>std::tuple_element&lt;1ul, std::pair&lt;std::__detail::_Node_iterator&lt;std::pair&lt;std::__cxx11::basic_string&lt;char, std::char_traits&lt;char&gt;, std::allocator&lt;char&gt; &gt; const, WeatherStation&gt;, false, true&gt;, bool&gt; &gt;::type&amp;&amp; std::get&lt;1ul, std::__detail::_Node_iterator&lt;std::pair&lt;std::__cxx11::basic_string&lt;char, std::char_traits&lt;char&gt;, std::allocator&lt;char&gt; &gt; const, WeatherStation&gt;, false, true&gt;, bool&gt; (2,574,066,976 samples, 0.23%)</title><rect x="1187.3" y="261" width="2.7" height="15.0" fill="rgb(248,198,47)" rx="2" ry="2" />
+<text  x="1190.32" y="271.5" ></text>
+</g>
+<g >
+<title>__sysvec_apic_timer_interrupt (162,192,033 samples, 0.01%)</title><rect x="602.3" y="181" width="0.2" height="15.0" fill="rgb(242,173,41)" rx="2" ry="2" />
+<text  x="605.33" y="191.5" ></text>
+</g>
+<g >
+<title> (46,934,835,087 samples, 4.14%)</title><rect x="474.6" y="229" width="48.8" height="15.0" fill="rgb(232,128,30)" rx="2" ry="2" />
+<text  x="477.61" y="239.5" ></text>
+</g>
+<g >
+<title>memcpy@plt (2,025,096,884 samples, 0.18%)</title><rect x="395.9" y="229" width="2.1" height="15.0" fill="rgb(224,88,21)" rx="2" ry="2" />
+<text  x="398.94" y="239.5" ></text>
+</g>
+<g >
+<title>[libstdc++.so.6.0.33] (1,133,082,834,524 samples, 99.90%)</title><rect x="11.2" y="357" width="1178.8" height="15.0" fill="rgb(216,51,12)" rx="2" ry="2" />
+<text  x="14.23" y="367.5" >[libstdc++.so.6.0.33]</text>
+</g>
+<g >
+<title>hrtimer_interrupt (865,128,451 samples, 0.08%)</title><rect x="335.4" y="197" width="0.9" height="15.0" fill="rgb(228,109,26)" rx="2" ry="2" />
+<text  x="338.42" y="207.5" ></text>
+</g>
+<g >
+<title>__libc_start_main@@GLIBC_2.34 (1,128,734,846 samples, 0.10%)</title><rect x="10.1" y="373" width="1.1" height="15.0" fill="rgb(229,113,27)" rx="2" ry="2" />
+<text  x="13.06" y="383.5" ></text>
+</g>
+<g >
+<title>std::__detail::_Mod_range_hashing::operator (2,922,441,897 samples, 0.26%)</title><rect x="720.8" y="149" width="3.0" height="15.0" fill="rgb(230,116,27)" rx="2" ry="2" />
+<text  x="723.78" y="159.5" ></text>
+</g>
+<g >
+<title>do_user_addr_fault (2,214,369,284 samples, 0.20%)</title><rect x="332.9" y="213" width="2.3" height="15.0" fill="rgb(228,108,25)" rx="2" ry="2" />
+<text  x="335.90" y="223.5" ></text>
+</g>
+<g >
+<title>__sysvec_apic_timer_interrupt (865,128,451 samples, 0.08%)</title><rect x="335.4" y="213" width="0.9" height="15.0" fill="rgb(242,173,41)" rx="2" ry="2" />
+<text  x="338.42" y="223.5" ></text>
+</g>
+<g >
+<title>__gnu_cxx::__aligned_buffer&lt;std::pair&lt;std::__cxx11::basic_string&lt;char, std::char_traits&lt;char&gt;, std::allocator&lt;char&gt; &gt; const, WeatherStation&gt; &gt;::_M_ptr (6,164,077,346 samples, 0.54%)</title><rect x="782.0" y="149" width="6.4" height="15.0" fill="rgb(209,19,4)" rx="2" ry="2" />
+<text  x="784.96" y="159.5" ></text>
+</g>
+<g >
+<title>std::__detail::_Hash_code_base&lt;std::__cxx11::basic_string&lt;char, std::char_traits&lt;char&gt;, std::allocator&lt;char&gt; &gt;, std::pair&lt;std::__cxx11::basic_string&lt;char, std::char_traits&lt;char&gt;, std::allocator&lt;char&gt; &gt; const, WeatherStation&gt;, std::__detail::_Select1st, std::hash&lt;std::__cxx11::basic_string&lt;char, std::char_traits&lt;char&gt;, std::allocator&lt;char&gt; &gt; &gt;, std::__detail::_Mod_range_hashing, std::__detail::_Default_ranged_hash, true&gt;::_M_hash_code (82,231,065,257 samples, 7.25%)</title><rect x="934.8" y="213" width="85.6" height="15.0" fill="rgb(216,53,12)" rx="2" ry="2" />
+<text  x="937.83" y="223.5" >std::__det..</text>
+</g>
+<g >
+<title>std::char_traits&lt;char&gt;::compare (4,391,112,495 samples, 0.39%)</title><rect x="880.0" y="133" width="4.6" height="15.0" fill="rgb(243,176,42)" rx="2" ry="2" />
+<text  x="883.00" y="143.5" ></text>
+</g>
+<g >
+<title>__sysvec_apic_timer_interrupt (99,675,824 samples, 0.01%)</title><rect x="788.4" y="117" width="0.1" height="15.0" fill="rgb(242,173,41)" rx="2" ry="2" />
+<text  x="791.37" y="127.5" ></text>
+</g>
+<g >
+<title>std::__detail::_Node_iterator&lt;std::pair&lt;std::__cxx11::basic_string&lt;char, std::char_traits&lt;char&gt;, std::allocator&lt;char&gt; &gt; const, WeatherStation&gt;, false, true&gt;&amp;&amp; std::forward&lt;std::__detail::_Node_iterator&lt;std::pair&lt;std::__cxx11::basic_string&lt;char, std::char_traits&lt;char&gt;, std::allocator&lt;char&gt; &gt; const, WeatherStation&gt;, false, true&gt; &gt; (3,801,203,851 samples, 0.34%)</title><rect x="1024.5" y="213" width="4.0" height="15.0" fill="rgb(242,173,41)" rx="2" ry="2" />
+<text  x="1027.54" y="223.5" ></text>
+</g>
+<g >
+<title>void std::__cxx11::basic_string&lt;char, std::char_traits&lt;char&gt;, std::allocator&lt;char&gt; &gt;::_M_construct&lt;char const*&gt; (3,721,026,361 samples, 0.33%)</title><rect x="1159.4" y="245" width="3.8" height="15.0" fill="rgb(254,226,54)" rx="2" ry="2" />
+<text  x="1162.38" y="255.5" ></text>
+</g>
+<g >
+<title>do_vmi_munmap (1,126,028,834 samples, 0.10%)</title><rect x="10.1" y="245" width="1.1" height="15.0" fill="rgb(253,223,53)" rx="2" ry="2" />
+<text  x="13.06" y="255.5" ></text>
+</g>
+<g >
+<title>std::__detail::_Hashtable_base&lt;std::__cxx11::basic_string&lt;char, std::char_traits&lt;char&gt;, std::allocator&lt;char&gt; &gt;, std::pair&lt;std::__cxx11::basic_string&lt;char, std::char_traits&lt;char&gt;, std::allocator&lt;char&gt; &gt; const, WeatherStation&gt;, std::__detail::_Select1st, std::equal_to&lt;std::__cxx11::basic_string&lt;char, std::char_traits&lt;char&gt;, std::allocator&lt;char&gt; &gt; &gt;, std::hash&lt;std::__cxx11::basic_string&lt;char, std::char_traits&lt;char&gt;, std::allocator&lt;char&gt; &gt; &gt;, std::__detail::_Mod_range_hashing, std::__detail::_Default_ranged_hash, std::__detail::_Hashtable_traits&lt;true, false, true&gt; &gt;::_M_key_equals (123,287,443,975 samples, 10.87%)</title><rect x="758.5" y="165" width="128.3" height="15.0" fill="rgb(223,85,20)" rx="2" ry="2" />
+<text  x="761.53" y="175.5" >std::__detail::_..</text>
+</g>
+<g >
+<title>std::pair&lt;std::__cxx11::basic_string&lt;char, std::char_traits&lt;char&gt;, std::allocator&lt;char&gt; &gt; const, WeatherStation&gt; const&amp; std::forward&lt;std::pair&lt;std::__cxx11::basic_string&lt;char, std::char_traits&lt;char&gt;, std::allocator&lt;char&gt; &gt; const, WeatherStation&gt; const&amp;&gt; (2,126,180,111 samples, 0.19%)</title><rect x="884.6" y="149" width="2.2" height="15.0" fill="rgb(216,54,13)" rx="2" ry="2" />
+<text  x="887.57" y="159.5" ></text>
+</g>
+<g >
+<title>__gnu_cxx::__aligned_buffer&lt;std::pair&lt;std::__cxx11::basic_string&lt;char, std::char_traits&lt;char&gt;, std::allocator&lt;char&gt; &gt; const, WeatherStation&gt; &gt;::_M_ptr (24,703,576,734 samples, 2.18%)</title><rect x="497.6" y="213" width="25.7" height="15.0" fill="rgb(209,19,4)" rx="2" ry="2" />
+<text  x="500.59" y="223.5" >_..</text>
+</g>
+<g >
+<title>std::__detail::_Hashtable_base&lt;std::__cxx11::basic_string&lt;char, std::char_traits&lt;char&gt;, std::allocator&lt;char&gt; &gt;, std::pair&lt;std::__cxx11::basic_string&lt;char, std::char_traits&lt;char&gt;, std::allocator&lt;char&gt; &gt; const, WeatherStation&gt;, std::__detail::_Select1st, std::equal_to&lt;std::__cxx11::basic_string&lt;char, std::char_traits&lt;char&gt;, std::allocator&lt;char&gt; &gt; &gt;, std::hash&lt;std::__cxx11::basic_string&lt;char, std::char_traits&lt;char&gt;, std::allocator&lt;char&gt; &gt; &gt;, std::__detail::_Mod_range_hashing, std::__detail::_Default_ranged_hash, std::__detail::_Hashtable_traits&lt;true, false, true&gt; &gt;::_M_eq (7,526,758,656 samples, 0.66%)</title><rect x="790.0" y="149" width="7.8" height="15.0" fill="rgb(235,140,33)" rx="2" ry="2" />
+<text  x="793.02" y="159.5" ></text>
+</g>
+<g >
+<title>std::__detail::_Node_const_iterator&lt;std::pair&lt;std::__cxx11::basic_string&lt;char, std::char_traits&lt;char&gt;, std::allocator&lt;char&gt; &gt; const, WeatherStation&gt;, false, true&gt;::_Node_const_iterator (4,198,024,265 samples, 0.37%)</title><rect x="1108.8" y="213" width="4.3" height="15.0" fill="rgb(224,91,21)" rx="2" ry="2" />
+<text  x="1111.76" y="223.5" ></text>
+</g>
+<g >
+<title>handle_mm_fault (2,088,211,439 samples, 0.18%)</title><rect x="333.0" y="197" width="2.1" height="15.0" fill="rgb(234,135,32)" rx="2" ry="2" />
+<text  x="335.97" y="207.5" ></text>
+</g>
+<g >
+<title>std::char_traits&lt;char&gt;::length (3,217,600,045 samples, 0.28%)</title><rect x="525.6" y="245" width="3.3" height="15.0" fill="rgb(245,188,44)" rx="2" ry="2" />
+<text  x="528.59" y="255.5" ></text>
+</g>
+<g >
+<title>sched_tick (522,675,682 samples, 0.05%)</title><rect x="335.6" y="133" width="0.6" height="15.0" fill="rgb(238,155,37)" rx="2" ry="2" />
+<text  x="338.63" y="143.5" ></text>
+</g>
+<g >
+<title>tick_nohz_handler (144,165,813 samples, 0.01%)</title><rect x="602.3" y="133" width="0.2" height="15.0" fill="rgb(248,200,48)" rx="2" ry="2" />
+<text  x="605.33" y="143.5" ></text>
+</g>
+<g >
+<title>hrtimer_interrupt (144,213,469 samples, 0.01%)</title><rect x="715.3" y="133" width="0.1" height="15.0" fill="rgb(228,109,26)" rx="2" ry="2" />
+<text  x="718.25" y="143.5" ></text>
+</g>
+<g >
+<title>set_pte_range (612,220,254 samples, 0.05%)</title><rect x="334.3" y="101" width="0.6" height="15.0" fill="rgb(224,90,21)" rx="2" ry="2" />
+<text  x="337.28" y="111.5" ></text>
+</g>
+<g >
+<title>exc_page_fault (2,286,465,821 samples, 0.20%)</title><rect x="332.9" y="229" width="2.4" height="15.0" fill="rgb(212,35,8)" rx="2" ry="2" />
+<text  x="335.88" y="239.5" ></text>
+</g>
+<g >
+<title>__memmove_avx_unaligned_erms_rtm (9,293,629,224 samples, 0.82%)</title><rect x="375.5" y="229" width="9.7" height="15.0" fill="rgb(251,214,51)" rx="2" ry="2" />
+<text  x="378.51" y="239.5" ></text>
+</g>
+<g >
+<title>std::__cxx11::basic_string&lt;char, std::char_traits&lt;char&gt;, std::allocator&lt;char&gt; &gt;::length (5,281,363,505 samples, 0.47%)</title><rect x="954.0" y="197" width="5.5" height="15.0" fill="rgb(232,126,30)" rx="2" ry="2" />
+<text  x="957.01" y="207.5" ></text>
+</g>
+<g >
+<title>std::__detail::_Hash_code_base&lt;std::__cxx11::basic_string&lt;char, std::char_traits&lt;char&gt;, std::allocator&lt;char&gt; &gt;, std::pair&lt;std::__cxx11::basic_string&lt;char, std::char_traits&lt;char&gt;, std::allocator&lt;char&gt; &gt; const, WeatherStation&gt;, std::__detail::_Select1st, std::hash&lt;std::__cxx11::basic_string&lt;char, std::char_traits&lt;char&gt;, std::allocator&lt;char&gt; &gt; &gt;, std::__detail::_Mod_range_hashing, std::__detail::_Default_ranged_hash, true&gt;::_M_hash_code (3,060,668,164 samples, 0.27%)</title><rect x="549.1" y="229" width="3.2" height="15.0" fill="rgb(216,53,12)" rx="2" ry="2" />
+<text  x="552.11" y="239.5" ></text>
+</g>
+<g >
+<title>memcmp@plt (2,179,665,549 samples, 0.19%)</title><rect x="845.9" y="117" width="2.3" height="15.0" fill="rgb(251,214,51)" rx="2" ry="2" />
+<text  x="848.94" y="127.5" ></text>
+</g>
+<g >
+<title> (6,812,434,585 samples, 0.60%)</title><rect x="1172.8" y="245" width="7.1" height="15.0" fill="rgb(232,128,30)" rx="2" ry="2" />
+<text  x="1175.83" y="255.5" ></text>
+</g>
+<g >
+<title>unmap_vmas (1,126,028,834 samples, 0.10%)</title><rect x="10.1" y="181" width="1.1" height="15.0" fill="rgb(243,176,42)" rx="2" ry="2" />
+<text  x="13.06" y="191.5" ></text>
+</g>
+<g >
+<title>std::__detail::_Node_iterator&lt;std::pair&lt;std::__cxx11::basic_string&lt;char, std::char_traits&lt;char&gt;, std::allocator&lt;char&gt; &gt; const, WeatherStation&gt;, false, true&gt;&amp;&amp; std::forward&lt;std::__detail::_Node_iterator&lt;std::pair&lt;std::__cxx11::basic_string&lt;char, std::char_traits&lt;char&gt;, std::allocator&lt;char&gt; &gt; const, WeatherStation&gt;, false, true&gt; &gt; (2,125,802,665 samples, 0.19%)</title><rect x="1131.5" y="213" width="2.2" height="15.0" fill="rgb(242,173,41)" rx="2" ry="2" />
+<text  x="1134.46" y="223.5" ></text>
+</g>
+<g >
+<title>asm_sysvec_apic_timer_interrupt (162,192,033 samples, 0.01%)</title><rect x="602.3" y="213" width="0.2" height="15.0" fill="rgb(232,127,30)" rx="2" ry="2" />
+<text  x="605.33" y="223.5" ></text>
+</g>
+<g >
+<title>std::__detail::_Hash_code_base&lt;std::__cxx11::basic_string&lt;char, std::char_traits&lt;char&gt;, std::allocator&lt;char&gt; &gt;, std::pair&lt;std::__cxx11::basic_string&lt;char, std::char_traits&lt;char&gt;, std::allocator&lt;char&gt; &gt; const, WeatherStation&gt;, std::__detail::_Select1st, std::hash&lt;std::__cxx11::basic_string&lt;char, std::char_traits&lt;char&gt;, std::allocator&lt;char&gt; &gt; &gt;, std::__detail::_Mod_range_hashing, std::__detail::_Default_ranged_hash, true&gt;::_M_hash (11,139,282,064 samples, 0.98%)</title><rect x="959.5" y="197" width="11.6" height="15.0" fill="rgb(235,139,33)" rx="2" ry="2" />
+<text  x="962.51" y="207.5" ></text>
+</g>
+<g >
+<title>std::_Hashtable&lt;std::__cxx11::basic_string&lt;char, std::char_traits&lt;char&gt;, std::allocator&lt;char&gt; &gt;, std::pair&lt;std::__cxx11::basic_string&lt;char, std::char_traits&lt;char&gt;, std::allocator&lt;char&gt; &gt; const, WeatherStation&gt;, std::allocator&lt;std::pair&lt;std::__cxx11::basic_string&lt;char, std::char_traits&lt;char&gt;, std::allocator&lt;char&gt; &gt; const, WeatherStation&gt; &gt;, std::__detail::_Select1st, std::equal_to&lt;std::__cxx11::basic_string&lt;char, std::char_traits&lt;char&gt;, std::allocator&lt;char&gt; &gt; &gt;, std::hash&lt;std::__cxx11::basic_string&lt;char, std::char_traits&lt;char&gt;, std::allocator&lt;char&gt; &gt; &gt;, std::__detail::_Mod_range_hashing, std::__detail::_Default_ranged_hash, std::__detail::_Prime_rehash_policy, std::__detail::_Hashtable_traits&lt;true, false, true&gt; &gt;::_M_bucket_index (522,394,553 samples, 0.05%)</title><rect x="664.9" y="197" width="0.6" height="15.0" fill="rgb(209,22,5)" rx="2" ry="2" />
+<text  x="667.93" y="207.5" ></text>
+</g>
+<g >
+<title>__sysvec_apic_timer_interrupt (108,128,685 samples, 0.01%)</title><rect x="903.3" y="117" width="0.1" height="15.0" fill="rgb(242,173,41)" rx="2" ry="2" />
+<text  x="906.30" y="127.5" ></text>
+</g>
+<g >
+<title>next_uptodate_folio (774,089,071 samples, 0.07%)</title><rect x="333.4" y="101" width="0.8" height="15.0" fill="rgb(209,20,4)" rx="2" ry="2" />
+<text  x="336.44" y="111.5" ></text>
+</g>
+<g >
+<title>std::__detail::_Hash_code_base&lt;std::__cxx11::basic_string&lt;char, std::char_traits&lt;char&gt;, std::allocator&lt;char&gt; &gt;, std::pair&lt;std::__cxx11::basic_string&lt;char, std::char_traits&lt;char&gt;, std::allocator&lt;char&gt; &gt; const, WeatherStation&gt;, std::__detail::_Select1st, std::hash&lt;std::__cxx11::basic_string&lt;char, std::char_traits&lt;char&gt;, std::allocator&lt;char&gt; &gt; &gt;, std::__detail::_Mod_range_hashing, std::__detail::_Default_ranged_hash, true&gt;::_M_hash (1,242,410,239 samples, 0.11%)</title><rect x="933.5" y="213" width="1.3" height="15.0" fill="rgb(235,139,33)" rx="2" ry="2" />
+<text  x="936.53" y="223.5" ></text>
+</g>
+<g >
+<title>__gnu_cxx::__aligned_buffer&lt;std::pair&lt;std::__cxx11::basic_string&lt;char, std::char_traits&lt;char&gt;, std::allocator&lt;char&gt; &gt; const, WeatherStation&gt; &gt;::_M_addr (2,018,622,594 samples, 0.18%)</title><rect x="779.9" y="149" width="2.1" height="15.0" fill="rgb(213,38,9)" rx="2" ry="2" />
+<text  x="782.86" y="159.5" ></text>
+</g>
+<g >
+<title>std::__detail::_Hash_code_base&lt;std::__cxx11::basic_string&lt;char, std::char_traits&lt;char&gt;, std::allocator&lt;char&gt; &gt;, std::pair&lt;std::__cxx11::basic_string&lt;char, std::char_traits&lt;char&gt;, std::allocator&lt;char&gt; &gt; const, WeatherStation&gt;, std::__detail::_Select1st, std::hash&lt;std::__cxx11::basic_string&lt;char, std::char_traits&lt;char&gt;, std::allocator&lt;char&gt; &gt; &gt;, std::__detail::_Mod_range_hashing, std::__detail::_Default_ranged_hash, true&gt;::_M_bucket_index (28,172,465,428 samples, 2.48%)</title><rect x="613.4" y="197" width="29.4" height="15.0" fill="rgb(250,211,50)" rx="2" ry="2" />
+<text  x="616.45" y="207.5" >st..</text>
+</g>
+<g >
+<title>do_read_fault (1,890,984,358 samples, 0.17%)</title><rect x="333.1" y="133" width="1.9" height="15.0" fill="rgb(223,84,20)" rx="2" ry="2" />
+<text  x="336.06" y="143.5" ></text>
+</g>
+<g >
+<title>do_fault (1,890,984,358 samples, 0.17%)</title><rect x="333.1" y="149" width="1.9" height="15.0" fill="rgb(248,200,47)" rx="2" ry="2" />
+<text  x="336.06" y="159.5" ></text>
+</g>
+<g >
+<title>std::__detail::_Select1st::__1st_type&lt;std::pair&lt;std::__cxx11::basic_string&lt;char, std::char_traits&lt;char&gt;, std::allocator&lt;char&gt; &gt; const, WeatherStation&gt; const&amp;&gt;::type&amp;&amp; std::__detail::_Select1st::operator (5,354,510,402 samples, 0.47%)</title><rect x="801.1" y="149" width="5.5" height="15.0" fill="rgb(215,48,11)" rx="2" ry="2" />
+<text  x="804.08" y="159.5" ></text>
+</g>
+<g >
+<title>xas_load (126,173,237 samples, 0.01%)</title><rect x="334.1" y="69" width="0.1" height="15.0" fill="rgb(217,59,14)" rx="2" ry="2" />
+<text  x="337.09" y="79.5" ></text>
+</g>
+<g >
+<title>std::__cxx11::basic_string&lt;char, std::char_traits&lt;char&gt;, std::allocator&lt;char&gt; &gt;::data (7,882,036,657 samples, 0.69%)</title><rect x="861.6" y="133" width="8.2" height="15.0" fill="rgb(231,120,28)" rx="2" ry="2" />
+<text  x="864.64" y="143.5" ></text>
+</g>
+<g >
+<title>std::__detail::_Hash_node&lt;std::pair&lt;std::__cxx11::basic_string&lt;char, std::char_traits&lt;char&gt;, std::allocator&lt;char&gt; &gt; const, WeatherStation&gt;, true&gt;::_M_next (2,302,150,480 samples, 0.20%)</title><rect x="724.9" y="181" width="2.4" height="15.0" fill="rgb(253,224,53)" rx="2" ry="2" />
+<text  x="727.87" y="191.5" ></text>
+</g>
+<g >
+<title>__gnu_cxx::__aligned_buffer&lt;std::pair&lt;std::__cxx11::basic_string&lt;char, std::char_traits&lt;char&gt;, std::allocator&lt;char&gt; &gt; const, WeatherStation&gt; &gt;::_M_addr (11,592,531,321 samples, 1.02%)</title><rect x="511.2" y="197" width="12.1" height="15.0" fill="rgb(213,38,9)" rx="2" ry="2" />
+<text  x="514.21" y="207.5" ></text>
+</g>
+<g >
+<title>std::_Hash_impl::hash (3,549,719,709 samples, 0.31%)</title><rect x="945.6" y="197" width="3.7" height="15.0" fill="rgb(226,96,23)" rx="2" ry="2" />
+<text  x="948.64" y="207.5" ></text>
+</g>
+<g >
+<title>std::__str_hash_base&lt;char, std::allocator&lt;char&gt;, std::__cxx11::basic_string&lt;char, std::char_traits&lt;char&gt;, std::allocator&lt;char&gt; &gt; &gt;::operator (2,648,522,083 samples, 0.23%)</title><rect x="1049.1" y="213" width="2.8" height="15.0" fill="rgb(222,81,19)" rx="2" ry="2" />
+<text  x="1052.12" y="223.5" ></text>
+</g>
+<g >
+<title>__sysvec_apic_timer_interrupt (162,242,105 samples, 0.01%)</title><rect x="715.3" y="149" width="0.1" height="15.0" fill="rgb(242,173,41)" rx="2" ry="2" />
+<text  x="718.25" y="159.5" ></text>
+</g>
+<g >
+<title>folio_remove_rmap_ptes (453,951,045 samples, 0.04%)</title><rect x="10.7" y="69" width="0.5" height="15.0" fill="rgb(219,68,16)" rx="2" ry="2" />
+<text  x="13.69" y="79.5" ></text>
+</g>
+<g >
+<title>std::__detail::_Node_iterator&lt;std::pair&lt;std::__cxx11::basic_string&lt;char, std::char_traits&lt;char&gt;, std::allocator&lt;char&gt; &gt; const, WeatherStation&gt;, false, true&gt;&amp;&amp; std::forward&lt;std::__detail::_Node_iterator&lt;std::pair&lt;std::__cxx11::basic_string&lt;char, std::char_traits&lt;char&gt;, std::allocator&lt;char&gt; &gt; const, WeatherStation&gt;, false, true&gt; &gt; (3,183,348,349 samples, 0.28%)</title><rect x="1070.2" y="197" width="3.3" height="15.0" fill="rgb(242,173,41)" rx="2" ry="2" />
+<text  x="1073.21" y="207.5" ></text>
+</g>
+<g >
+<title>std::equal_to&lt;std::__cxx11::basic_string&lt;char, std::char_traits&lt;char&gt;, std::allocator&lt;char&gt; &gt; &gt;::operator (74,903,336,678 samples, 6.60%)</title><rect x="806.6" y="149" width="78.0" height="15.0" fill="rgb(245,188,45)" rx="2" ry="2" />
+<text  x="809.65" y="159.5" >std::equa..</text>
+</g>
+<g >
+<title>__irqentry_text_end (324,430,482 samples, 0.03%)</title><rect x="332.4" y="245" width="0.4" height="15.0" fill="rgb(248,199,47)" rx="2" ry="2" />
+<text  x="335.45" y="255.5" ></text>
+</g>
+<g >
+<title>std::pair&lt;std::__detail::_Node_iterator&lt;std::pair&lt;std::__cxx11::basic_string&lt;char, std::char_traits&lt;char&gt;, std::allocator&lt;char&gt; &gt; const, WeatherStation&gt;, false, true&gt;, bool&gt; std::__detail::_Insert_base&lt;std::__cxx11::basic_string&lt;char, std::char_traits&lt;char&gt;, std::allocator&lt;char&gt; &gt;, std::pair&lt;std::__cxx11::basic_string&lt;char, std::char_traits&lt;char&gt;, std::allocator&lt;char&gt; &gt; const, WeatherStation&gt;, std::allocator&lt;std::pair&lt;std::__cxx11::basic_string&lt;char, std::char_traits&lt;char&gt;, std::allocator&lt;char&gt; &gt; const, WeatherStation&gt; &gt;, std::__detail::_Select1st, std::equal_to&lt;std::__cxx11::basic_string&lt;char, std::char_traits&lt;char&gt;, std::allocator&lt;char&gt; &gt; &gt;, std::hash&lt;std::__cxx11::basic_string&lt;char, std::char_traits&lt;char&gt;, std::allocator&lt;char&gt; &gt; &gt;, std::__detail::_Mod_range_hashing, std::__detail::_Default_ranged_hash, std::__detail::_Prime_rehash_policy, std::__detail::_Hashtable_traits&lt;true, false, true&gt; &gt;::try_emplace&lt;std::__cxx11::basic_string&lt;char, std::char_traits&lt;char&gt;, std::allocator&lt;char&gt; &gt;&gt; (492,091,792,465 samples, 43.38%)</title><rect x="561.6" y="229" width="511.9" height="15.0" fill="rgb(235,140,33)" rx="2" ry="2" />
+<text  x="564.59" y="239.5" >std::pair&lt;std::__detail::_Node_iterator&lt;std::pair&lt;std::__cxx11::basic_..</text>
+</g>
+<g >
+<title>std::tuple_element&lt;0ul, std::pair&lt;std::__detail::_Node_iterator&lt;std::pair&lt;std::__cxx11::basic_string&lt;char, std::char_traits&lt;char&gt;, std::allocator&lt;char&gt; &gt; const, WeatherStation&gt;, false, true&gt;, bool&gt; &gt;::type&amp;&amp; std::get&lt;0ul, std::__detail::_Node_iterator&lt;std::pair&lt;std::__cxx11::basic_string&lt;char, std::char_traits&lt;char&gt;, std::allocator&lt;char&gt; &gt; const, WeatherStation&gt;, false, true&gt;, bool&gt; (18,090,504,329 samples, 1.59%)</title><rect x="1119.5" y="245" width="18.8" height="15.0" fill="rgb(211,27,6)" rx="2" ry="2" />
+<text  x="1122.46" y="255.5" ></text>
+</g>
+<g >
+<title>sysvec_apic_timer_interrupt (180,266,045 samples, 0.02%)</title><rect x="715.3" y="165" width="0.1" height="15.0" fill="rgb(220,69,16)" rx="2" ry="2" />
+<text  x="718.25" y="175.5" ></text>
+</g>
+<g >
+<title>__libc_start_call_main (1,128,734,846 samples, 0.10%)</title><rect x="10.1" y="357" width="1.1" height="15.0" fill="rgb(210,26,6)" rx="2" ry="2" />
+<text  x="13.06" y="367.5" ></text>
+</g>
+<g >
+<title>__gnu_cxx::__aligned_buffer&lt;std::pair&lt;std::__cxx11::basic_string&lt;char, std::char_traits&lt;char&gt;, std::allocator&lt;char&gt; &gt; const, WeatherStation&gt; &gt;::_M_addr (557,624,008 samples, 0.05%)</title><rect x="497.0" y="213" width="0.6" height="15.0" fill="rgb(213,38,9)" rx="2" ry="2" />
+<text  x="500.01" y="223.5" ></text>
+</g>
+<g >
+<title>std::_Hashtable&lt;std::__cxx11::basic_string&lt;char, std::char_traits&lt;char&gt;, std::allocator&lt;char&gt; &gt;, std::pair&lt;std::__cxx11::basic_string&lt;char, std::char_traits&lt;char&gt;, std::allocator&lt;char&gt; &gt; const, WeatherStation&gt;, std::allocator&lt;std::pair&lt;std::__cxx11::basic_string&lt;char, std::char_traits&lt;char&gt;, std::allocator&lt;char&gt; &gt; const, WeatherStation&gt; &gt;, std::__detail::_Select1st, std::equal_to&lt;std::__cxx11::basic_string&lt;char, std::char_traits&lt;char&gt;, std::allocator&lt;char&gt; &gt; &gt;, std::hash&lt;std::__cxx11::basic_string&lt;char, std::char_traits&lt;char&gt;, std::allocator&lt;char&gt; &gt; &gt;, std::__detail::_Mod_range_hashing, std::__detail::_Default_ranged_hash, std::__detail::_Prime_rehash_policy, std::__detail::_Hashtable_traits&lt;true, false, true&gt; &gt;::end (1,044,367,551 samples, 0.09%)</title><rect x="548.0" y="229" width="1.1" height="15.0" fill="rgb(223,83,20)" rx="2" ry="2" />
+<text  x="551.03" y="239.5" ></text>
+</g>
+<g >
+<title>std::__detail::_Hash_node&lt;std::pair&lt;std::__cxx11::basic_string&lt;char, std::char_traits&lt;char&gt;, std::allocator&lt;char&gt; &gt; const, WeatherStation&gt;, true&gt;::_M_next (1,099,431,976 samples, 0.10%)</title><rect x="918.4" y="197" width="1.2" height="15.0" fill="rgb(253,224,53)" rx="2" ry="2" />
+<text  x="921.44" y="207.5" ></text>
+</g>
+<g >
+<title>std::char_traits&lt;char&gt;::compare (11,344,891,071 samples, 1.00%)</title><rect x="849.8" y="117" width="11.8" height="15.0" fill="rgb(243,176,42)" rx="2" ry="2" />
+<text  x="852.83" y="127.5" ></text>
+</g>
+<g >
+<title>std::__is_constant_evaluated (2,017,997,797 samples, 0.18%)</title><rect x="422.1" y="229" width="2.1" height="15.0" fill="rgb(234,137,32)" rx="2" ry="2" />
+<text  x="425.09" y="239.5" ></text>
+</g>
+<g >
+<title>std::__detail::_Hashtable_base&lt;std::__cxx11::basic_string&lt;char, std::char_traits&lt;char&gt;, std::allocator&lt;char&gt; &gt;, std::pair&lt;std::__cxx11::basic_string&lt;char, std::char_traits&lt;char&gt;, std::allocator&lt;char&gt; &gt; const, WeatherStation&gt;, std::__detail::_Select1st, std::equal_to&lt;std::__cxx11::basic_string&lt;char, std::char_traits&lt;char&gt;, std::allocator&lt;char&gt; &gt; &gt;, std::hash&lt;std::__cxx11::basic_string&lt;char, std::char_traits&lt;char&gt;, std::allocator&lt;char&gt; &gt; &gt;, std::__detail::_Mod_range_hashing, std::__detail::_Default_ranged_hash, std::__detail::_Hashtable_traits&lt;true, false, true&gt; &gt;::_M_eq (5,057,375,862 samples, 0.45%)</title><rect x="753.3" y="165" width="5.2" height="15.0" fill="rgb(235,140,33)" rx="2" ry="2" />
+<text  x="756.26" y="175.5" ></text>
+</g>
+<g >
+<title>bool&amp;&amp; std::forward&lt;bool&gt; (3,605,089,487 samples, 0.32%)</title><rect x="1147.7" y="213" width="3.8" height="15.0" fill="rgb(220,70,16)" rx="2" ry="2" />
+<text  x="1150.71" y="223.5" ></text>
+</g>
+<g >
+<title>update_process_times (144,213,469 samples, 0.01%)</title><rect x="715.3" y="85" width="0.1" height="15.0" fill="rgb(250,209,50)" rx="2" ry="2" />
+<text  x="718.25" y="95.5" ></text>
+</g>
+<g >
+<title>std::pair&lt;std::__detail::_Node_iterator&lt;std::pair&lt;std::__cxx11::basic_string&lt;char, std::char_traits&lt;char&gt;, std::allocator&lt;char&gt; &gt; const, WeatherStation&gt;, false, true&gt;, bool&gt;::pair&lt;std::__detail::_Node_iterator&lt;std::pair&lt;std::__cxx11::basic_string&lt;char, std::char_traits&lt;char&gt;, std::allocator&lt;char&gt; &gt; const, WeatherStation&gt;, false, true&gt;, bool, true&gt; (4,987,084,901 samples, 0.44%)</title><rect x="1073.5" y="229" width="5.2" height="15.0" fill="rgb(223,84,20)" rx="2" ry="2" />
+<text  x="1076.53" y="239.5" ></text>
+</g>
+<g >
+<title>unmap_single_vma (1,126,028,834 samples, 0.10%)</title><rect x="10.1" y="165" width="1.1" height="15.0" fill="rgb(225,93,22)" rx="2" ry="2" />
+<text  x="13.06" y="175.5" ></text>
+</g>
+<g >
+<title>std::__detail::_Mod_range_hashing::operator (15,784,157,974 samples, 1.39%)</title><rect x="626.3" y="181" width="16.5" height="15.0" fill="rgb(230,116,27)" rx="2" ry="2" />
+<text  x="629.33" y="191.5" ></text>
+</g>
+<g >
+<title>std::unordered_map&lt;std::__cxx11::basic_string&lt;char, std::char_traits&lt;char&gt;, std::allocator&lt;char&gt; &gt;, WeatherStation, std::hash&lt;std::__cxx11::basic_string&lt;char, std::char_traits&lt;char&gt;, std::allocator&lt;char&gt; &gt; &gt;, std::equal_to&lt;std::__cxx11::basic_string&lt;char, std::char_traits&lt;char&gt;, std::allocator&lt;char&gt; &gt; &gt;, std::allocator&lt;std::pair&lt;std::__cxx11::basic_string&lt;char, std::char_traits&lt;char&gt;, std::allocator&lt;char&gt; &gt; const, WeatherStation&gt; &gt; &gt;::cend (3,593,020,432 samples, 0.32%)</title><rect x="1155.6" y="245" width="3.7" height="15.0" fill="rgb(215,47,11)" rx="2" ry="2" />
+<text  x="1158.56" y="255.5" ></text>
+</g>
+<g >
+<title>tick_nohz_handler (144,213,469 samples, 0.01%)</title><rect x="715.3" y="101" width="0.1" height="15.0" fill="rgb(248,200,48)" rx="2" ry="2" />
+<text  x="718.25" y="111.5" ></text>
+</g>
+<g >
+<title>std::__detail::_Hashtable_base&lt;std::__cxx11::basic_string&lt;char, std::char_traits&lt;char&gt;, std::allocator&lt;char&gt; &gt;, std::pair&lt;std::__cxx11::basic_string&lt;char, std::char_traits&lt;char&gt;, std::allocator&lt;char&gt; &gt; const, WeatherStation&gt;, std::__detail::_Select1st, std::equal_to&lt;std::__cxx11::basic_string&lt;char, std::char_traits&lt;char&gt;, std::allocator&lt;char&gt; &gt; &gt;, std::hash&lt;std::__cxx11::basic_string&lt;char, std::char_traits&lt;char&gt;, std::allocator&lt;char&gt; &gt; &gt;, std::__detail::_Mod_range_hashing, std::__detail::_Default_ranged_hash, std::__detail::_Hashtable_traits&lt;true, false, true&gt; &gt;::_S_equals (2,587,369,199 samples, 0.23%)</title><rect x="915.7" y="181" width="2.7" height="15.0" fill="rgb(223,86,20)" rx="2" ry="2" />
+<text  x="918.74" y="191.5" ></text>
+</g>
+<g >
+<title>std::__detail::_Hash_code_base&lt;std::__cxx11::basic_string&lt;char, std::char_traits&lt;char&gt;, std::allocator&lt;char&gt; &gt;, std::pair&lt;std::__cxx11::basic_string&lt;char, std::char_traits&lt;char&gt;, std::allocator&lt;char&gt; &gt; const, WeatherStation&gt;, std::__detail::_Select1st, std::hash&lt;std::__cxx11::basic_string&lt;char, std::char_traits&lt;char&gt;, std::allocator&lt;char&gt; &gt; &gt;, std::__detail::_Mod_range_hashing, std::__detail::_Default_ranged_hash, true&gt;::_M_bucket_index (396,539,791 samples, 0.03%)</title><rect x="724.5" y="181" width="0.4" height="15.0" fill="rgb(250,211,50)" rx="2" ry="2" />
+<text  x="727.46" y="191.5" ></text>
+</g>
+<g >
+<title>__hrtimer_run_queues (144,213,469 samples, 0.01%)</title><rect x="715.3" y="117" width="0.1" height="15.0" fill="rgb(237,150,35)" rx="2" ry="2" />
+<text  x="718.25" y="127.5" ></text>
+</g>
+<g >
+<title>std::__detail::_Node_iterator_base&lt;std::pair&lt;std::__cxx11::basic_string&lt;char, std::char_traits&lt;char&gt;, std::allocator&lt;char&gt; &gt; const, WeatherStation&gt;, true&gt;::_Node_iterator_base (2,717,094,536 samples, 0.24%)</title><rect x="1105.9" y="197" width="2.9" height="15.0" fill="rgb(253,221,53)" rx="2" ry="2" />
+<text  x="1108.94" y="207.5" ></text>
+</g>
+<g >
+<title>__gnu_cxx::__aligned_buffer&lt;std::pair&lt;std::__cxx11::basic_string&lt;char, std::char_traits&lt;char&gt;, std::allocator&lt;char&gt; &gt; const, WeatherStation&gt; &gt;::_M_addr (3,359,866,490 samples, 0.30%)</title><rect x="784.9" y="133" width="3.5" height="15.0" fill="rgb(213,38,9)" rx="2" ry="2" />
+<text  x="787.86" y="143.5" ></text>
+</g>
+<g >
+<title>std::__detail::_Node_iterator&lt;std::pair&lt;std::__cxx11::basic_string&lt;char, std::char_traits&lt;char&gt;, std::allocator&lt;char&gt; &gt; const, WeatherStation&gt;, false, true&gt;&amp;&amp; std::__pair_get&lt;0ul&gt;::__move_get&lt;std::__detail::_Node_iterator&lt;std::pair&lt;std::__cxx11::basic_string&lt;char, std::char_traits&lt;char&gt;, std::allocator&lt;char&gt; &gt; const, WeatherStation&gt;, false, true&gt;, bool&gt; (6,123,981,419 samples, 0.54%)</title><rect x="1127.3" y="229" width="6.4" height="15.0" fill="rgb(215,48,11)" rx="2" ry="2" />
+<text  x="1130.30" y="239.5" ></text>
+</g>
+<g >
+<title>std::pair&lt;std::__detail::_Node_iterator&lt;std::pair&lt;std::__cxx11::basic_string&lt;char, std::char_traits&lt;char&gt;, std::allocator&lt;char&gt; &gt; const, WeatherStation&gt;, false, true&gt;, bool&gt; std::__detail::_Insert_base&lt;std::__cxx11::basic_string&lt;char, std::char_traits&lt;char&gt;, std::allocator&lt;char&gt; &gt;, std::pair&lt;std::__cxx11::basic_string&lt;char, std::char_traits&lt;char&gt;, std::allocator&lt;char&gt; &gt; const, WeatherStation&gt;, std::allocator&lt;std::pair&lt;std::__cxx11::basic_string&lt;char, std::char_traits&lt;char&gt;, std::allocator&lt;char&gt; &gt; const, WeatherStation&gt; &gt;, std::__detail::_Select1st, std::equal_to&lt;std::__cxx11::basic_string&lt;char, std::char_traits&lt;char&gt;, std::allocator&lt;char&gt; &gt; &gt;, std::hash&lt;std::__cxx11::basic_string&lt;char, std::char_traits&lt;char&gt;, std::allocator&lt;char&gt; &gt; &gt;, std::__detail::_Mod_range_hashing, std::__detail::_Default_ranged_hash, std::__detail::_Prime_rehash_policy, std::__detail::_Hashtable_traits&lt;true, false, true&gt; &gt;::try_emplace&lt;std::__cxx11::basic_string&lt;char, std::char_traits&lt;char&gt;, std::allocator&lt;char&gt; &gt;&gt; (2,712,092,951 samples, 0.24%)</title><rect x="528.9" y="245" width="2.9" height="15.0" fill="rgb(235,140,33)" rx="2" ry="2" />
+<text  x="531.94" y="255.5" ></text>
+</g>
+<g >
+<title>vms_complete_munmap_vmas (1,126,028,834 samples, 0.10%)</title><rect x="10.1" y="213" width="1.1" height="15.0" fill="rgb(216,52,12)" rx="2" ry="2" />
+<text  x="13.06" y="223.5" ></text>
+</g>
+<g >
+<title>zap_pte_range (1,120,168,474 samples, 0.10%)</title><rect x="10.1" y="101" width="1.1" height="15.0" fill="rgb(231,120,28)" rx="2" ry="2" />
+<text  x="13.06" y="111.5" ></text>
+</g>
+<g >
+<title>std::__detail::_Hashtable_ebo_helper&lt;0, std::equal_to&lt;std::__cxx11::basic_string&lt;char, std::char_traits&lt;char&gt;, std::allocator&lt;char&gt; &gt; &gt;, true&gt;::_M_cget (3,107,699,136 samples, 0.27%)</title><rect x="797.8" y="149" width="3.3" height="15.0" fill="rgb(241,165,39)" rx="2" ry="2" />
+<text  x="800.85" y="159.5" ></text>
+</g>
+<g >
+<title>hrtimer_interrupt (108,128,685 samples, 0.01%)</title><rect x="903.3" y="101" width="0.1" height="15.0" fill="rgb(228,109,26)" rx="2" ry="2" />
+<text  x="906.30" y="111.5" ></text>
+</g>
+<g >
+<title>operator new (198,289,953 samples, 0.02%)</title><rect x="398.0" y="229" width="0.2" height="15.0" fill="rgb(216,51,12)" rx="2" ry="2" />
+<text  x="401.04" y="239.5" ></text>
+</g>
+<g >
+<title>bool std::operator==&lt;char, std::char_traits&lt;char&gt;, std::allocator&lt;char&gt; &gt; (1,481,997,708 samples, 0.13%)</title><rect x="788.5" y="149" width="1.5" height="15.0" fill="rgb(227,102,24)" rx="2" ry="2" />
+<text  x="791.47" y="159.5" ></text>
+</g>
+<g >
+<title>std::thread::_Invoker&lt;std::tuple&lt;main::{lambda (1,133,082,834,524 samples, 99.90%)</title><rect x="11.2" y="325" width="1178.8" height="15.0" fill="rgb(249,205,49)" rx="2" ry="2" />
+<text  x="14.23" y="335.5" >std::thread::_Invoker&lt;std::tuple&lt;main::{lambda</text>
+</g>
+<g >
+<title>std::_Hashtable&lt;std::__cxx11::basic_string&lt;char, std::char_traits&lt;char&gt;, std::allocator&lt;char&gt; &gt;, std::pair&lt;std::__cxx11::basic_string&lt;char, std::char_traits&lt;char&gt;, std::allocator&lt;char&gt; &gt; const, WeatherStation&gt;, std::allocator&lt;std::pair&lt;std::__cxx11::basic_string&lt;char, std::char_traits&lt;char&gt;, std::allocator&lt;char&gt; &gt; const, WeatherStation&gt; &gt;, std::__detail::_Select1st, std::equal_to&lt;std::__cxx11::basic_string&lt;char, std::char_traits&lt;char&gt;, std::allocator&lt;char&gt; &gt; &gt;, std::hash&lt;std::__cxx11::basic_string&lt;char, std::char_traits&lt;char&gt;, std::allocator&lt;char&gt; &gt; &gt;, std::__detail::_Mod_range_hashing, std::__detail::_Default_ranged_hash, std::__detail::_Prime_rehash_policy, std::__detail::_Hashtable_traits&lt;true, false, true&gt; &gt;::end (19,314,359,397 samples, 1.70%)</title><rect x="1088.7" y="213" width="20.1" height="15.0" fill="rgb(223,83,20)" rx="2" ry="2" />
+<text  x="1091.67" y="223.5" ></text>
+</g>
+<g >
+<title>free@plt (108,148,948 samples, 0.01%)</title><rect x="11.3" y="261" width="0.1" height="15.0" fill="rgb(229,112,26)" rx="2" ry="2" />
+<text  x="14.31" y="271.5" ></text>
+</g>
+<g >
+<title>std::pair&lt;std::__cxx11::basic_string&lt;char, std::char_traits&lt;char&gt;, std::allocator&lt;char&gt; &gt; const, WeatherStation&gt; const&amp; std::forward&lt;std::pair&lt;std::__cxx11::basic_string&lt;char, std::char_traits&lt;char&gt;, std::allocator&lt;char&gt; &gt; const, WeatherStation&gt; const&amp;&gt; (2,379,390,998 samples, 0.21%)</title><rect x="804.2" y="133" width="2.4" height="15.0" fill="rgb(216,54,13)" rx="2" ry="2" />
+<text  x="807.17" y="143.5" ></text>
+</g>
+<g >
+<title>std::__cxx11::basic_string&lt;char, std::char_traits&lt;char&gt;, std::allocator&lt;char&gt; &gt;::_M_construct&lt;char const*&gt; (10,730,844,309 samples, 0.95%)</title><rect x="460.6" y="213" width="11.2" height="15.0" fill="rgb(214,43,10)" rx="2" ry="2" />
+<text  x="463.61" y="223.5" ></text>
+</g>
+<g >
+<title>__munmap (1,126,028,834 samples, 0.10%)</title><rect x="10.1" y="341" width="1.1" height="15.0" fill="rgb(211,29,7)" rx="2" ry="2" />
+<text  x="13.06" y="351.5" ></text>
+</g>
+<g >
+<title>std::_Hash_impl::hash (5,312,638,650 samples, 0.47%)</title><rect x="1014.8" y="181" width="5.6" height="15.0" fill="rgb(226,96,23)" rx="2" ry="2" />
+<text  x="1017.85" y="191.5" ></text>
+</g>
+<g >
+<title>__memcmp_avx2_movbe_rtm (17,481,179,796 samples, 1.54%)</title><rect x="827.7" y="117" width="18.1" height="15.0" fill="rgb(221,75,17)" rx="2" ry="2" />
+<text  x="830.66" y="127.5" ></text>
+</g>
+<g >
+<title>std::pair&lt;std::__detail::_Node_iterator&lt;std::pair&lt;std::__cxx11::basic_string&lt;char, std::char_traits&lt;char&gt;, std::allocator&lt;char&gt; &gt; const, WeatherStation&gt;, false, true&gt;, bool&gt;::pair&lt;std::__detail::_Node_iterator&lt;std::pair&lt;std::__cxx11::basic_string&lt;char, std::char_traits&lt;char&gt;, std::allocator&lt;char&gt; &gt; const, WeatherStation&gt;, false, true&gt;, bool, true&gt; (20,808,504,716 samples, 1.83%)</title><rect x="1051.9" y="213" width="21.6" height="15.0" fill="rgb(223,84,20)" rx="2" ry="2" />
+<text  x="1054.88" y="223.5" >s..</text>
+</g>
+<g >
+<title>xas_find (144,203,054 samples, 0.01%)</title><rect x="334.1" y="85" width="0.1" height="15.0" fill="rgb(211,29,7)" rx="2" ry="2" />
+<text  x="337.09" y="95.5" ></text>
+</g>
+<g >
+<title>sysvec_apic_timer_interrupt (162,192,033 samples, 0.01%)</title><rect x="602.3" y="197" width="0.2" height="15.0" fill="rgb(220,69,16)" rx="2" ry="2" />
+<text  x="605.33" y="207.5" ></text>
+</g>
+<g >
+<title>asm_exc_page_fault (2,340,542,381 samples, 0.21%)</title><rect x="332.8" y="245" width="2.5" height="15.0" fill="rgb(225,93,22)" rx="2" ry="2" />
+<text  x="335.84" y="255.5" ></text>
+</g>
+<g >
+<title>std::remove_reference&lt;std::__cxx11::basic_string&lt;char, std::char_traits&lt;char&gt;, std::allocator&lt;char&gt; &gt;&amp;&gt;::type&amp;&amp; std::move&lt;std::__cxx11::basic_string&lt;char, std::char_traits&lt;char&gt;, std::allocator&lt;char&gt; &gt;&amp;&gt; (2,705,889,143 samples, 0.24%)</title><rect x="1078.7" y="229" width="2.8" height="15.0" fill="rgb(232,126,30)" rx="2" ry="2" />
+<text  x="1081.71" y="239.5" ></text>
+</g>
+<g >
+<title>strlen@plt (966,585,702 samples, 0.09%)</title><rect x="429.1" y="229" width="1.0" height="15.0" fill="rgb(240,162,38)" rx="2" ry="2" />
+<text  x="432.11" y="239.5" ></text>
+</g>
+<g >
+<title>__handle_mm_fault (1,998,072,148 samples, 0.18%)</title><rect x="333.0" y="181" width="2.1" height="15.0" fill="rgb(207,9,2)" rx="2" ry="2" />
+<text  x="335.99" y="191.5" ></text>
+</g>
+<g >
+<title>sysvec_apic_timer_interrupt (901,180,701 samples, 0.08%)</title><rect x="335.4" y="229" width="1.0" height="15.0" fill="rgb(220,69,16)" rx="2" ry="2" />
+<text  x="338.42" y="239.5" ></text>
+</g>
+<g >
+<title>std::__detail::_Hashtable_base&lt;std::__cxx11::basic_string&lt;char, std::char_traits&lt;char&gt;, std::allocator&lt;char&gt; &gt;, std::pair&lt;std::__cxx11::basic_string&lt;char, std::char_traits&lt;char&gt;, std::allocator&lt;char&gt; &gt; const, WeatherStation&gt;, std::__detail::_Select1st, std::equal_to&lt;std::__cxx11::basic_string&lt;char, std::char_traits&lt;char&gt;, std::allocator&lt;char&gt; &gt; &gt;, std::hash&lt;std::__cxx11::basic_string&lt;char, std::char_traits&lt;char&gt;, std::allocator&lt;char&gt; &gt; &gt;, std::__detail::_Mod_range_hashing, std::__detail::_Default_ranged_hash, std::__detail::_Hashtable_traits&lt;true, false, true&gt; &gt;::_M_equals (10,658,272,109 samples, 0.94%)</title><rect x="919.6" y="197" width="11.1" height="15.0" fill="rgb(212,34,8)" rx="2" ry="2" />
+<text  x="922.58" y="207.5" ></text>
+</g>
+<g >
+<title>std::__detail::_Mod_range_hashing::operator (608,809,582 samples, 0.05%)</title><rect x="723.8" y="165" width="0.7" height="15.0" fill="rgb(230,116,27)" rx="2" ry="2" />
+<text  x="726.82" y="175.5" ></text>
+</g>
+<g >
+<title>entry_SYSCALL_64_after_hwframe (1,126,028,834 samples, 0.10%)</title><rect x="10.1" y="325" width="1.1" height="15.0" fill="rgb(218,63,15)" rx="2" ry="2" />
+<text  x="13.06" y="335.5" ></text>
+</g>
+<g >
+<title>__gnu_cxx::__aligned_buffer&lt;std::pair&lt;std::__cxx11::basic_string&lt;char, std::char_traits&lt;char&gt;, std::allocator&lt;char&gt; &gt; const, WeatherStation&gt; &gt;::_M_ptr (955,140,454 samples, 0.08%)</title><rect x="331.5" y="245" width="0.9" height="15.0" fill="rgb(209,19,4)" rx="2" ry="2" />
+<text  x="334.45" y="255.5" ></text>
+</g>
+<g >
+<title>zap_present_ptes.constprop.0 (860,612,728 samples, 0.08%)</title><rect x="10.3" y="85" width="0.9" height="15.0" fill="rgb(247,197,47)" rx="2" ry="2" />
+<text  x="13.33" y="95.5" ></text>
+</g>
+<g >
+<title>std::__cxx11::basic_string&lt;char, std::char_traits&lt;char&gt;, std::allocator&lt;char&gt; &gt;::size (9,774,694,894 samples, 0.86%)</title><rect x="869.8" y="133" width="10.2" height="15.0" fill="rgb(218,60,14)" rx="2" ry="2" />
+<text  x="872.84" y="143.5" ></text>
+</g>
+<g >
+<title>std::__detail::_Hash_code_base&lt;std::__cxx11::basic_string&lt;char, std::char_traits&lt;char&gt;, std::allocator&lt;char&gt; &gt;, std::pair&lt;std::__cxx11::basic_string&lt;char, std::char_traits&lt;char&gt;, std::allocator&lt;char&gt; &gt; const, WeatherStation&gt;, std::__detail::_Select1st, std::hash&lt;std::__cxx11::basic_string&lt;char, std::char_traits&lt;char&gt;, std::allocator&lt;char&gt; &gt; &gt;, std::__detail::_Mod_range_hashing, std::__detail::_Default_ranged_hash, true&gt;::_M_bucket_index (2,753,789,651 samples, 0.24%)</title><rect x="930.7" y="213" width="2.8" height="15.0" fill="rgb(250,211,50)" rx="2" ry="2" />
+<text  x="933.67" y="223.5" ></text>
+</g>
+<g >
+<title>std::__detail::_Hash_code_base&lt;std::__cxx11::basic_string&lt;char, std::char_traits&lt;char&gt;, std::allocator&lt;char&gt; &gt;, std::pair&lt;std::__cxx11::basic_string&lt;char, std::char_traits&lt;char&gt;, std::allocator&lt;char&gt; &gt; const, WeatherStation&gt;, std::__detail::_Select1st, std::hash&lt;std::__cxx11::basic_string&lt;char, std::char_traits&lt;char&gt;, std::allocator&lt;char&gt; &gt; &gt;, std::__detail::_Mod_range_hashing, std::__detail::_Default_ranged_hash, true&gt;::_M_bucket_index (5,661,332,938 samples, 0.50%)</title><rect x="717.9" y="165" width="5.9" height="15.0" fill="rgb(250,211,50)" rx="2" ry="2" />
+<text  x="720.93" y="175.5" ></text>
+</g>
+<g >
+<title>std::_Hashtable&lt;std::__cxx11::basic_string&lt;char, std::char_traits&lt;char&gt;, std::allocator&lt;char&gt; &gt;, std::pair&lt;std::__cxx11::basic_string&lt;char, std::char_traits&lt;char&gt;, std::allocator&lt;char&gt; &gt; const, WeatherStation&gt;, std::allocator&lt;std::pair&lt;std::__cxx11::basic_string&lt;char, std::char_traits&lt;char&gt;, std::allocator&lt;char&gt; &gt; const, WeatherStation&gt; &gt;, std::__detail::_Select1st, std::equal_to&lt;std::__cxx11::basic_string&lt;char, std::char_traits&lt;char&gt;, std::allocator&lt;char&gt; &gt; &gt;, std::hash&lt;std::__cxx11::basic_string&lt;char, std::char_traits&lt;char&gt;, std::allocator&lt;char&gt; &gt; &gt;, std::__detail::_Mod_range_hashing, std::__detail::_Default_ranged_hash, std::__detail::_Prime_rehash_policy, std::__detail::_Hashtable_traits&lt;true, false, true&gt; &gt;::_M_find_before_node (3,313,478,184 samples, 0.29%)</title><rect x="646.3" y="213" width="3.5" height="15.0" fill="rgb(209,22,5)" rx="2" ry="2" />
+<text  x="649.32" y="223.5" ></text>
+</g>
+<g >
+<title>std::__cxx11::basic_string&lt;char, std::char_traits&lt;char&gt;, std::allocator&lt;char&gt; &gt;::_M_set_length (5,276,743,750 samples, 0.47%)</title><rect x="411.8" y="229" width="5.5" height="15.0" fill="rgb(249,204,48)" rx="2" ry="2" />
+<text  x="414.81" y="239.5" ></text>
+</g>
+<g >
+<title>std::__detail::_Hashtable_base&lt;std::__cxx11::basic_string&lt;char, std::char_traits&lt;char&gt;, std::allocator&lt;char&gt; &gt;, std::pair&lt;std::__cxx11::basic_string&lt;char, std::char_traits&lt;char&gt;, std::allocator&lt;char&gt; &gt; const, WeatherStation&gt;, std::__detail::_Select1st, std::equal_to&lt;std::__cxx11::basic_string&lt;char, std::char_traits&lt;char&gt;, std::allocator&lt;char&gt; &gt; &gt;, std::hash&lt;std::__cxx11::basic_string&lt;char, std::char_traits&lt;char&gt;, std::allocator&lt;char&gt; &gt; &gt;, std::__detail::_Mod_range_hashing, std::__detail::_Default_ranged_hash, std::__detail::_Hashtable_traits&lt;true, false, true&gt; &gt;::_M_key_equals (4,508,704,698 samples, 0.40%)</title><rect x="911.1" y="181" width="4.6" height="15.0" fill="rgb(223,85,20)" rx="2" ry="2" />
+<text  x="914.05" y="191.5" ></text>
+</g>
+<g >
+<title>std::__detail::_Node_iterator&lt;std::pair&lt;std::__cxx11::basic_string&lt;char, std::char_traits&lt;char&gt;, std::allocator&lt;char&gt; &gt; const, WeatherStation&gt;, false, true&gt;::_Node_iterator (17,290,275,320 samples, 1.52%)</title><rect x="1028.5" y="213" width="18.0" height="15.0" fill="rgb(221,74,17)" rx="2" ry="2" />
+<text  x="1031.49" y="223.5" ></text>
+</g>
+<g >
+<title>do_syscall_64 (1,126,028,834 samples, 0.10%)</title><rect x="10.1" y="309" width="1.1" height="15.0" fill="rgb(209,20,4)" rx="2" ry="2" />
+<text  x="13.06" y="319.5" ></text>
+</g>
+<g >
+<title>int const&amp; std::min&lt;int&gt; (2,891,236,928 samples, 0.25%)</title><rect x="14.4" y="261" width="3.0" height="15.0" fill="rgb(250,207,49)" rx="2" ry="2" />
+<text  x="17.44" y="271.5" ></text>
+</g>
+<g >
+<title>_int_free (558,771,092 samples, 0.05%)</title><rect x="339.5" y="229" width="0.6" height="15.0" fill="rgb(247,196,46)" rx="2" ry="2" />
+<text  x="342.48" y="239.5" ></text>
+</g>
+<g >
+<title>__hrtimer_run_queues (108,128,685 samples, 0.01%)</title><rect x="903.3" y="85" width="0.1" height="15.0" fill="rgb(237,150,35)" rx="2" ry="2" />
+<text  x="906.30" y="95.5" ></text>
+</g>
+<g >
+<title>std::_Hashtable&lt;std::__cxx11::basic_string&lt;char, std::char_traits&lt;char&gt;, std::allocator&lt;char&gt; &gt;, std::pair&lt;std::__cxx11::basic_string&lt;char, std::char_traits&lt;char&gt;, std::allocator&lt;char&gt; &gt; const, WeatherStation&gt;, std::allocator&lt;std::pair&lt;std::__cxx11::basic_string&lt;char, std::char_traits&lt;char&gt;, std::allocator&lt;char&gt; &gt; const, WeatherStation&gt; &gt;, std::__detail::_Select1st, std::equal_to&lt;std::__cxx11::basic_string&lt;char, std::char_traits&lt;char&gt;, std::allocator&lt;char&gt; &gt; &gt;, std::hash&lt;std::__cxx11::basic_string&lt;char, std::char_traits&lt;char&gt;, std::allocator&lt;char&gt; &gt; &gt;, std::__detail::_Mod_range_hashing, std::__detail::_Default_ranged_hash, std::__detail::_Prime_rehash_policy, std::__detail::_Hashtable_traits&lt;true, false, true&gt; &gt;::_M_find_before_node (243,155,287,834 samples, 21.44%)</title><rect x="665.5" y="197" width="252.9" height="15.0" fill="rgb(209,22,5)" rx="2" ry="2" />
+<text  x="668.48" y="207.5" >std::_Hashtable&lt;std::__cxx11::bas..</text>
+</g>
+<g >
+<title>bool&amp;&amp; std::__pair_get&lt;1ul&gt;::__move_get&lt;std::__detail::_Node_iterator&lt;std::pair&lt;std::__cxx11::basic_string&lt;char, std::char_traits&lt;char&gt;, std::allocator&lt;char&gt; &gt; const, WeatherStation&gt;, false, true&gt;, bool&gt; (2,364,460,502 samples, 0.21%)</title><rect x="336.4" y="245" width="2.4" height="15.0" fill="rgb(244,182,43)" rx="2" ry="2" />
+<text  x="339.36" y="255.5" ></text>
+</g>
+<g >
+<title>handle_pte_fault (1,927,036,896 samples, 0.17%)</title><rect x="333.1" y="165" width="2.0" height="15.0" fill="rgb(217,57,13)" rx="2" ry="2" />
+<text  x="336.06" y="175.5" ></text>
+</g>
+<g >
+<title>std::_Hashtable&lt;std::__cxx11::basic_string&lt;char, std::char_traits&lt;char&gt;, std::allocator&lt;char&gt; &gt;, std::pair&lt;std::__cxx11::basic_string&lt;char, std::char_traits&lt;char&gt;, std::allocator&lt;char&gt; &gt; const, WeatherStation&gt;, std::allocator&lt;std::pair&lt;std::__cxx11::basic_string&lt;char, std::char_traits&lt;char&gt;, std::allocator&lt;char&gt; &gt; const, WeatherStation&gt; &gt;, std::__detail::_Select1st, std::equal_to&lt;std::__cxx11::basic_string&lt;char, std::char_traits&lt;char&gt;, std::allocator&lt;char&gt; &gt; &gt;, std::hash&lt;std::__cxx11::basic_string&lt;char, std::char_traits&lt;char&gt;, std::allocator&lt;char&gt; &gt; &gt;, std::__detail::_Mod_range_hashing, std::__detail::_Default_ranged_hash, std::__detail::_Prime_rehash_policy, std::__detail::_Hashtable_traits&lt;true, false, true&gt; &gt;::_M_bucket_index (1,402,560,093 samples, 0.12%)</title><rect x="543.9" y="229" width="1.5" height="15.0" fill="rgb(209,22,5)" rx="2" ry="2" />
+<text  x="546.93" y="239.5" ></text>
+</g>
+<g >
+<title>std::char_traits&lt;char&gt;::length (4,736,085,292 samples, 0.42%)</title><rect x="424.2" y="229" width="4.9" height="15.0" fill="rgb(245,188,44)" rx="2" ry="2" />
+<text  x="427.19" y="239.5" ></text>
+</g>
+<g >
+<title>std::pair&lt;std::__detail::_Node_iterator&lt;std::pair&lt;std::__cxx11::basic_string&lt;char, std::char_traits&lt;char&gt;, std::allocator&lt;char&gt; &gt; const, WeatherStation&gt;, false, true&gt;, bool&gt; std::unordered_map&lt;std::__cxx11::basic_string&lt;char, std::char_traits&lt;char&gt;, std::allocator&lt;char&gt; &gt;, WeatherStation, std::hash&lt;std::__cxx11::basic_string&lt;char, std::char_traits&lt;char&gt;, std::allocator&lt;char&gt; &gt; &gt;, std::equal_to&lt;std::__cxx11::basic_string&lt;char, std::char_traits&lt;char&gt;, std::allocator&lt;char&gt; &gt; &gt;, std::allocator&lt;std::pair&lt;std::__cxx11::basic_string&lt;char, std::char_traits&lt;char&gt;, std::allocator&lt;char&gt; &gt; const, WeatherStation&gt; &gt; &gt;::try_emplace&lt;&gt; (558,839,205,687 samples, 49.27%)</title><rect x="531.8" y="245" width="581.3" height="15.0" fill="rgb(244,183,43)" rx="2" ry="2" />
+<text  x="534.76" y="255.5" >std::pair&lt;std::__detail::_Node_iterator&lt;std::pair&lt;std::__cxx11::basic_string&lt;cha..</text>
+</g>
+<g >
+<title>std::__detail::_Mod_range_hashing::operator (3,432,485,848 samples, 0.30%)</title><rect x="642.8" y="197" width="3.5" height="15.0" fill="rgb(230,116,27)" rx="2" ry="2" />
+<text  x="645.75" y="207.5" ></text>
+</g>
+<g >
+<title>std::__is_constant_evaluated (1,108,442,000 samples, 0.10%)</title><rect x="860.5" y="101" width="1.1" height="15.0" fill="rgb(234,137,32)" rx="2" ry="2" />
+<text  x="863.48" y="111.5" ></text>
+</g>
+<g >
+<title>bool&amp;&amp; std::__pair_get&lt;1ul&gt;::__move_get&lt;std::__detail::_Node_iterator&lt;std::pair&lt;std::__cxx11::basic_string&lt;char, std::char_traits&lt;char&gt;, std::allocator&lt;char&gt; &gt; const, WeatherStation&gt;, false, true&gt;, bool&gt; (7,603,353,501 samples, 0.67%)</title><rect x="1143.5" y="229" width="8.0" height="15.0" fill="rgb(244,182,43)" rx="2" ry="2" />
+<text  x="1146.55" y="239.5" ></text>
+</g>
+<g >
+<title>std::remove_reference&lt;std::pair&lt;std::__detail::_Node_iterator&lt;std::pair&lt;std::__cxx11::basic_string&lt;char, std::char_traits&lt;char&gt;, std::allocator&lt;char&gt; &gt; const, WeatherStation&gt;, false, true&gt;, bool&gt;&amp;&gt;::type&amp;&amp; std::move&lt;std::pair&lt;std::__detail::_Node_iterator&lt;std::pair&lt;std::__cxx11::basic_string&lt;char, std::char_traits&lt;char&gt;, std::allocator&lt;char&gt; &gt; const, WeatherStation&gt;, false, true&gt;, bool&gt;&amp;&gt; (4,159,069,024 samples, 0.37%)</title><rect x="1115.1" y="245" width="4.4" height="15.0" fill="rgb(207,13,3)" rx="2" ry="2" />
+<text  x="1118.13" y="255.5" ></text>
+</g>
+<g >
+<title>std::__detail::_Select1st::__1st_type&lt;std::pair&lt;std::__cxx11::basic_string&lt;char, std::char_traits&lt;char&gt;, std::allocator&lt;char&gt; &gt; const, WeatherStation&gt; const&amp;&gt;::type&amp;&amp; std::__detail::_Select1st::operator (2,755,077,858 samples, 0.24%)</title><rect x="903.4" y="165" width="2.9" height="15.0" fill="rgb(215,48,11)" rx="2" ry="2" />
+<text  x="906.42" y="175.5" ></text>
+</g>
+<g >
+<title>std::__cxx11::basic_string&lt;char, std::char_traits&lt;char&gt;, std::allocator&lt;char&gt; &gt;::_M_local_data (2,347,144,373 samples, 0.21%)</title><rect x="356.8" y="245" width="2.5" height="15.0" fill="rgb(214,42,10)" rx="2" ry="2" />
+<text  x="359.81" y="255.5" ></text>
+</g>
+<g >
+<title>asm_sysvec_apic_timer_interrupt (180,266,045 samples, 0.02%)</title><rect x="715.3" y="181" width="0.1" height="15.0" fill="rgb(232,127,30)" rx="2" ry="2" />
+<text  x="718.25" y="191.5" ></text>
+</g>
+<g >
+<title>std::__cxx11::basic_string&lt;char, std::char_traits&lt;char&gt;, std::allocator&lt;char&gt; &gt;::basic_string&lt;std::allocator&lt;char&gt; &gt; (3,588,169,839 samples, 0.32%)</title><rect x="1163.3" y="261" width="3.7" height="15.0" fill="rgb(209,22,5)" rx="2" ry="2" />
+<text  x="1166.28" y="271.5" ></text>
+</g>
+<g >
+<title>bool&amp;&amp; std::forward&lt;bool&gt; (774,915,912 samples, 0.07%)</title><rect x="602.5" y="213" width="0.8" height="15.0" fill="rgb(220,70,16)" rx="2" ry="2" />
+<text  x="605.50" y="223.5" ></text>
+</g>
+<g >
+<title>std::__detail::_Node_iterator_base&lt;std::pair&lt;std::__cxx11::basic_string&lt;char, std::char_traits&lt;char&gt;, std::allocator&lt;char&gt; &gt; const, WeatherStation&gt;, true&gt;::_Node_iterator_base (5,569,923,616 samples, 0.49%)</title><rect x="1100.1" y="181" width="5.8" height="15.0" fill="rgb(253,221,53)" rx="2" ry="2" />
+<text  x="1103.14" y="191.5" ></text>
+</g>
+<g >
+<title>std::remove_reference&lt;std::pair&lt;std::__detail::_Node_iterator&lt;std::pair&lt;std::__cxx11::basic_string&lt;char, std::char_traits&lt;char&gt;, std::allocator&lt;char&gt; &gt; const, WeatherStation&gt;, false, true&gt;, bool&gt;&amp;&gt;::type&amp;&amp; std::move&lt;std::pair&lt;std::__detail::_Node_iterator&lt;std::pair&lt;std::__cxx11::basic_string&lt;char, std::char_traits&lt;char&gt;, std::allocator&lt;char&gt; &gt; const, WeatherStation&gt;, false, true&gt;, bool&gt;&amp;&gt; (2,809,781,011 samples, 0.25%)</title><rect x="1152.6" y="229" width="3.0" height="15.0" fill="rgb(207,13,3)" rx="2" ry="2" />
+<text  x="1155.64" y="239.5" ></text>
+</g>
+<g >
+<title>std::__detail::_Node_iterator&lt;std::pair&lt;std::__cxx11::basic_string&lt;char, std::char_traits&lt;char&gt;, std::allocator&lt;char&gt; &gt; const, WeatherStation&gt;, false, true&gt;::operator (46,934,835,087 samples, 4.14%)</title><rect x="474.6" y="245" width="48.8" height="15.0" fill="rgb(254,229,54)" rx="2" ry="2" />
+<text  x="477.61" y="255.5" >std:..</text>
+</g>
+<g >
+<title>std::__detail::_Hashtable_ebo_helper&lt;1, std::hash&lt;std::__cxx11::basic_string&lt;char, std::char_traits&lt;char&gt;, std::allocator&lt;char&gt; &gt; &gt;, true&gt;::_M_cget (4,948,777,244 samples, 0.44%)</title><rect x="965.9" y="181" width="5.2" height="15.0" fill="rgb(214,41,9)" rx="2" ry="2" />
+<text  x="968.95" y="191.5" ></text>
+</g>
+<g >
+<title>__lruvec_stat_mod_folio (359,867,794 samples, 0.03%)</title><rect x="334.5" y="69" width="0.3" height="15.0" fill="rgb(246,191,45)" rx="2" ry="2" />
+<text  x="337.45" y="79.5" ></text>
+</g>
+<g >
+<title>filemap_map_pages (1,800,856,411 samples, 0.16%)</title><rect x="333.1" y="117" width="1.9" height="15.0" fill="rgb(229,112,27)" rx="2" ry="2" />
+<text  x="336.08" y="127.5" ></text>
+</g>
+<g >
+<title>std::__new_allocator&lt;char&gt;::~__new_allocator (1,840,530,253 samples, 0.16%)</title><rect x="1179.9" y="261" width="1.9" height="15.0" fill="rgb(238,154,36)" rx="2" ry="2" />
+<text  x="1182.91" y="271.5" ></text>
+</g>
+<g >
+<title>std::pair&lt;std::__detail::_Node_iterator&lt;std::pair&lt;std::__cxx11::basic_string&lt;char, std::char_traits&lt;char&gt;, std::allocator&lt;char&gt; &gt; const, WeatherStation&gt;, false, true&gt;, bool&gt; std::unordered_map&lt;std::__cxx11::basic_string&lt;char, std::char_traits&lt;char&gt;, std::allocator&lt;char&gt; &gt;, WeatherStation, std::hash&lt;std::__cxx11::basic_string&lt;char, std::char_traits&lt;char&gt;, std::allocator&lt;char&gt; &gt; &gt;, std::equal_to&lt;std::__cxx11::basic_string&lt;char, std::char_traits&lt;char&gt;, std::allocator&lt;char&gt; &gt; &gt;, std::allocator&lt;std::pair&lt;std::__cxx11::basic_string&lt;char, std::char_traits&lt;char&gt;, std::allocator&lt;char&gt; &gt; const, WeatherStation&gt; &gt; &gt;::try_emplace&lt;&gt; (1,186,207,277 samples, 0.10%)</title><rect x="1181.8" y="261" width="1.3" height="15.0" fill="rgb(244,183,43)" rx="2" ry="2" />
+<text  x="1184.83" y="271.5" ></text>
+</g>
+<g >
+<title>std::__detail::_Hashtable_base&lt;std::__cxx11::basic_string&lt;char, std::char_traits&lt;char&gt;, std::allocator&lt;char&gt; &gt;, std::pair&lt;std::__cxx11::basic_string&lt;char, std::char_traits&lt;char&gt;, std::allocator&lt;char&gt; &gt; const, WeatherStation&gt;, std::__detail::_Select1st, std::equal_to&lt;std::__cxx11::basic_string&lt;char, std::char_traits&lt;char&gt;, std::allocator&lt;char&gt; &gt; &gt;, std::hash&lt;std::__cxx11::basic_string&lt;char, std::char_traits&lt;char&gt;, std::allocator&lt;char&gt; &gt; &gt;, std::__detail::_Mod_range_hashing, std::__detail::_Default_ranged_hash, std::__detail::_Hashtable_traits&lt;true, false, true&gt; &gt;::_S_equals (15,986,352,470 samples, 1.41%)</title><rect x="886.8" y="165" width="16.6" height="15.0" fill="rgb(223,86,20)" rx="2" ry="2" />
+<text  x="889.78" y="175.5" ></text>
+</g>
+<g >
+<title>task_tick_fair (288,347,950 samples, 0.03%)</title><rect x="335.8" y="117" width="0.3" height="15.0" fill="rgb(217,57,13)" rx="2" ry="2" />
+<text  x="338.82" y="127.5" ></text>
+</g>
+<g >
+<title>update_process_times (126,137,436 samples, 0.01%)</title><rect x="602.4" y="117" width="0.1" height="15.0" fill="rgb(250,209,50)" rx="2" ry="2" />
+<text  x="605.35" y="127.5" ></text>
+</g>
+<g >
+<title>std::__detail::_Node_iterator&lt;std::pair&lt;std::__cxx11::basic_string&lt;char, std::char_traits&lt;char&gt;, std::allocator&lt;char&gt; &gt; const, WeatherStation&gt;, false, true&gt;::operator (6,812,434,585 samples, 0.60%)</title><rect x="1172.8" y="261" width="7.1" height="15.0" fill="rgb(254,229,54)" rx="2" ry="2" />
+<text  x="1175.83" y="271.5" ></text>
+</g>
+<g >
+<title>std::__is_constant_evaluated (1,566,921,575 samples, 0.14%)</title><rect x="848.2" y="117" width="1.6" height="15.0" fill="rgb(234,137,32)" rx="2" ry="2" />
+<text  x="851.20" y="127.5" ></text>
+</g>
+<g >
+<title>std::_Hashtable&lt;std::__cxx11::basic_string&lt;char, std::char_traits&lt;char&gt;, std::allocator&lt;char&gt; &gt;, std::pair&lt;std::__cxx11::basic_string&lt;char, std::char_traits&lt;char&gt;, std::allocator&lt;char&gt; &gt; const, WeatherStation&gt;, std::allocator&lt;std::pair&lt;std::__cxx11::basic_string&lt;char, std::char_traits&lt;char&gt;, std::allocator&lt;char&gt; &gt; const, WeatherStation&gt; &gt;, std::__detail::_Select1st, std::equal_to&lt;std::__cxx11::basic_string&lt;char, std::char_traits&lt;char&gt;, std::allocator&lt;char&gt; &gt; &gt;, std::hash&lt;std::__cxx11::basic_string&lt;char, std::char_traits&lt;char&gt;, std::allocator&lt;char&gt; &gt; &gt;, std::__detail::_Mod_range_hashing, std::__detail::_Default_ranged_hash, std::__detail::_Prime_rehash_policy, std::__detail::_Hashtable_traits&lt;true, false, true&gt; &gt;::_M_find_node (2,539,858,857 samples, 0.22%)</title><rect x="545.4" y="229" width="2.6" height="15.0" fill="rgb(223,87,20)" rx="2" ry="2" />
+<text  x="548.39" y="239.5" ></text>
+</g>
+<g >
+<title>std::thread::_State_impl&lt;std::thread::_Invoker&lt;std::tuple&lt;main::{lambda (1,133,082,834,524 samples, 99.90%)</title><rect x="11.2" y="341" width="1178.8" height="15.0" fill="rgb(247,195,46)" rx="2" ry="2" />
+<text  x="14.23" y="351.5" >std::thread::_State_impl&lt;std::thread::_Invoker&lt;std::tuple&lt;main::{lambda</text>
+</g>
+<g >
+<title>malloc (972,386,632 samples, 0.09%)</title><rect x="459.6" y="197" width="1.0" height="15.0" fill="rgb(230,119,28)" rx="2" ry="2" />
+<text  x="462.60" y="207.5" ></text>
+</g>
+<g >
+<title>__strlen_avx2_rtm (10,264,873,460 samples, 0.90%)</title><rect x="385.2" y="229" width="10.7" height="15.0" fill="rgb(242,172,41)" rx="2" ry="2" />
+<text  x="388.18" y="239.5" ></text>
+</g>
+<g >
+<title>unmap_page_range (1,126,028,834 samples, 0.10%)</title><rect x="10.1" y="149" width="1.1" height="15.0" fill="rgb(206,5,1)" rx="2" ry="2" />
+<text  x="13.06" y="159.5" ></text>
+</g>
+<g >
+<title>sysvec_apic_timer_interrupt (108,128,685 samples, 0.01%)</title><rect x="903.3" y="133" width="0.1" height="15.0" fill="rgb(220,69,16)" rx="2" ry="2" />
+<text  x="906.30" y="143.5" ></text>
+</g>
+<g >
+<title>clone3 (1,133,082,834,524 samples, 99.90%)</title><rect x="11.2" y="389" width="1178.8" height="15.0" fill="rgb(216,54,12)" rx="2" ry="2" />
+<text  x="14.23" y="399.5" >clone3</text>
+</g>
+<g >
+<title>std::__cxx11::basic_string&lt;char, std::char_traits&lt;char&gt;, std::allocator&lt;char&gt; &gt;::_M_create (198,279,596 samples, 0.02%)</title><rect x="405.4" y="229" width="0.2" height="15.0" fill="rgb(248,198,47)" rx="2" ry="2" />
+<text  x="408.44" y="239.5" ></text>
+</g>
+<g >
+<title>bool&amp;&amp; std::forward&lt;bool&gt; (1,134,493,756 samples, 0.10%)</title><rect x="1151.5" y="229" width="1.1" height="15.0" fill="rgb(220,70,16)" rx="2" ry="2" />
+<text  x="1154.46" y="239.5" ></text>
+</g>
+<g >
+<title>__lruvec_stat_mod_folio (342,509,723 samples, 0.03%)</title><rect x="10.8" y="53" width="0.3" height="15.0" fill="rgb(246,191,45)" rx="2" ry="2" />
+<text  x="13.76" y="63.5" ></text>
+</g>
+<g >
+<title>sysvec_apic_timer_interrupt (99,675,824 samples, 0.01%)</title><rect x="788.4" y="133" width="0.1" height="15.0" fill="rgb(220,69,16)" rx="2" ry="2" />
+<text  x="791.37" y="143.5" ></text>
+</g>
+<g >
+<title>std::__detail::_Insert_base&lt;std::__cxx11::basic_string&lt;char, std::char_traits&lt;char&gt;, std::allocator&lt;char&gt; &gt;, std::pair&lt;std::__cxx11::basic_string&lt;char, std::char_traits&lt;char&gt;, std::allocator&lt;char&gt; &gt; const, WeatherStation&gt;, std::allocator&lt;std::pair&lt;std::__cxx11::basic_string&lt;char, std::char_traits&lt;char&gt;, std::allocator&lt;char&gt; &gt; const, WeatherStation&gt; &gt;, std::__detail::_Select1st, std::equal_to&lt;std::__cxx11::basic_string&lt;char, std::char_traits&lt;char&gt;, std::allocator&lt;char&gt; &gt; &gt;, std::hash&lt;std::__cxx11::basic_string&lt;char, std::char_traits&lt;char&gt;, std::allocator&lt;char&gt; &gt; &gt;, std::__detail::_Mod_range_hashing, std::__detail::_Default_ranged_hash, std::__detail::_Prime_rehash_policy, std::__detail::_Hashtable_traits&lt;true, false, true&gt; &gt;::_M_conjure_hashtable (3,629,253,418 samples, 0.32%)</title><rect x="552.3" y="229" width="3.8" height="15.0" fill="rgb(231,121,29)" rx="2" ry="2" />
+<text  x="555.30" y="239.5" ></text>
+</g>
+<g >
+<title>sched_tick (126,189,471 samples, 0.01%)</title><rect x="715.3" y="69" width="0.1" height="15.0" fill="rgb(238,155,37)" rx="2" ry="2" />
+<text  x="718.27" y="79.5" ></text>
+</g>
+<g >
+<title>__mod_memcg_lruvec_state (197,653,658 samples, 0.02%)</title><rect x="334.5" y="53" width="0.2" height="15.0" fill="rgb(247,195,46)" rx="2" ry="2" />
+<text  x="337.54" y="63.5" ></text>
+</g>
+<g >
+<title>std::_Hashtable&lt;std::__cxx11::basic_string&lt;char, std::char_traits&lt;char&gt;, std::allocator&lt;char&gt; &gt;, std::pair&lt;std::__cxx11::basic_string&lt;char, std::char_traits&lt;char&gt;, std::allocator&lt;char&gt; &gt; const, WeatherStation&gt;, std::allocator&lt;std::pair&lt;std::__cxx11::basic_string&lt;char, std::char_traits&lt;char&gt;, std::allocator&lt;char&gt; &gt; const, WeatherStation&gt; &gt;, std::__detail::_Select1st, std::equal_to&lt;std::__cxx11::basic_string&lt;char, std::char_traits&lt;char&gt;, std::allocator&lt;char&gt; &gt; &gt;, std::hash&lt;std::__cxx11::basic_string&lt;char, std::char_traits&lt;char&gt;, std::allocator&lt;char&gt; &gt; &gt;, std::__detail::_Mod_range_hashing, std::__detail::_Default_ranged_hash, std::__detail::_Prime_rehash_policy, std::__detail::_Hashtable_traits&lt;true, false, true&gt; &gt;::_M_bucket_index (8,665,395,406 samples, 0.76%)</title><rect x="715.4" y="181" width="9.1" height="15.0" fill="rgb(209,22,5)" rx="2" ry="2" />
+<text  x="718.44" y="191.5" ></text>
+</g>
+<g >
+<title>std::__detail::_Hashtable_ebo_helper&lt;0, std::equal_to&lt;std::__cxx11::basic_string&lt;char, std::char_traits&lt;char&gt;, std::allocator&lt;char&gt; &gt; &gt;, true&gt;::_M_cget (2,286,566,597 samples, 0.20%)</title><rect x="795.5" y="133" width="2.3" height="15.0" fill="rgb(241,165,39)" rx="2" ry="2" />
+<text  x="798.47" y="143.5" ></text>
+</g>
+<g >
+<title>std::_Hash_bytes (31,320,192,383 samples, 2.76%)</title><rect x="982.3" y="181" width="32.5" height="15.0" fill="rgb(232,127,30)" rx="2" ry="2" />
+<text  x="985.26" y="191.5" >st..</text>
+</g>
+<g >
+<title>std::_Hashtable&lt;std::__cxx11::basic_string&lt;char, std::char_traits&lt;char&gt;, std::allocator&lt;char&gt; &gt;, std::pair&lt;std::__cxx11::basic_string&lt;char, std::char_traits&lt;char&gt;, std::allocator&lt;char&gt; &gt; const, WeatherStation&gt;, std::allocator&lt;std::pair&lt;std::__cxx11::basic_string&lt;char, std::char_traits&lt;char&gt;, std::allocator&lt;char&gt; &gt; const, WeatherStation&gt; &gt;, std::__detail::_Select1st, std::equal_to&lt;std::__cxx11::basic_string&lt;char, std::char_traits&lt;char&gt;, std::allocator&lt;char&gt; &gt; &gt;, std::hash&lt;std::__cxx11::basic_string&lt;char, std::char_traits&lt;char&gt;, std::allocator&lt;char&gt; &gt; &gt;, std::__detail::_Mod_range_hashing, std::__detail::_Default_ranged_hash, std::__detail::_Prime_rehash_policy, std::__detail::_Hashtable_traits&lt;true, false, true&gt; &gt;::_M_bucket_index (41,349,345,513 samples, 3.65%)</title><rect x="603.3" y="213" width="43.0" height="15.0" fill="rgb(209,22,5)" rx="2" ry="2" />
+<text  x="606.31" y="223.5" >std:..</text>
+</g>
+<g >
+<title>malloc (162,229,724 samples, 0.01%)</title><rect x="459.2" y="213" width="0.2" height="15.0" fill="rgb(230,119,28)" rx="2" ry="2" />
+<text  x="462.19" y="223.5" ></text>
+</g>
+<g >
+<title>std::tuple_element&lt;1ul, std::pair&lt;std::__detail::_Node_iterator&lt;std::pair&lt;std::__cxx11::basic_string&lt;char, std::char_traits&lt;char&gt;, std::allocator&lt;char&gt; &gt; const, WeatherStation&gt;, false, true&gt;, bool&gt; &gt;::type&amp;&amp; std::get&lt;1ul, std::__detail::_Node_iterator&lt;std::pair&lt;std::__cxx11::basic_string&lt;char, std::char_traits&lt;char&gt;, std::allocator&lt;char&gt; &gt; const, WeatherStation&gt;, false, true&gt;, bool&gt; (16,612,426,313 samples, 1.46%)</title><rect x="1138.3" y="245" width="17.3" height="15.0" fill="rgb(248,198,47)" rx="2" ry="2" />
+<text  x="1141.28" y="255.5" ></text>
+</g>
+<g >
+<title>std::remove_reference&lt;std::__cxx11::basic_string&lt;char, std::char_traits&lt;char&gt;, std::allocator&lt;char&gt; &gt;&amp;&gt;::type&amp;&amp; std::move&lt;std::__cxx11::basic_string&lt;char, std::char_traits&lt;char&gt;, std::allocator&lt;char&gt; &gt;&amp;&gt; (1,925,303,023 samples, 0.17%)</title><rect x="1113.1" y="245" width="2.0" height="15.0" fill="rgb(232,126,30)" rx="2" ry="2" />
+<text  x="1116.13" y="255.5" ></text>
+</g>
+<g >
+<title>int const&amp; std::min&lt;int&gt; (5,657,456,932 samples, 0.50%)</title><rect x="347.2" y="245" width="5.9" height="15.0" fill="rgb(250,207,49)" rx="2" ry="2" />
+<text  x="350.18" y="255.5" ></text>
+</g>
+<g >
+<title>zap_pud_range.isra.0 (1,126,028,834 samples, 0.10%)</title><rect x="10.1" y="133" width="1.1" height="15.0" fill="rgb(242,172,41)" rx="2" ry="2" />
+<text  x="13.06" y="143.5" ></text>
+</g>
+<g >
+<title>asm_sysvec_apic_timer_interrupt (1,045,178,660 samples, 0.09%)</title><rect x="335.3" y="245" width="1.1" height="15.0" fill="rgb(232,127,30)" rx="2" ry="2" />
+<text  x="338.27" y="255.5" ></text>
+</g>
+<g >
+<title>std::__detail::_Node_const_iterator&lt;std::pair&lt;std::__cxx11::basic_string&lt;char, std::char_traits&lt;char&gt;, std::allocator&lt;char&gt; &gt; const, WeatherStation&gt;, false, true&gt;::_Node_const_iterator (9,854,666,722 samples, 0.87%)</title><rect x="1095.7" y="197" width="10.2" height="15.0" fill="rgb(224,91,21)" rx="2" ry="2" />
+<text  x="1098.69" y="207.5" ></text>
+</g>
+<g >
+<title>__gnu_cxx::__aligned_buffer&lt;std::pair&lt;std::__cxx11::basic_string&lt;char, std::char_traits&lt;char&gt;, std::allocator&lt;char&gt; &gt; const, WeatherStation&gt; &gt;::_M_ptr (2,394,088,736 samples, 0.21%)</title><rect x="750.7" y="165" width="2.5" height="15.0" fill="rgb(209,19,4)" rx="2" ry="2" />
+<text  x="753.70" y="175.5" ></text>
+</g>
+<g >
+<title>std::remove_reference&lt;std::pair&lt;std::__detail::_Node_iterator&lt;std::pair&lt;std::__cxx11::basic_string&lt;char, std::char_traits&lt;char&gt;, std::allocator&lt;char&gt; &gt; const, WeatherStation&gt;, false, true&gt;, bool&gt;&amp;&gt;::type&amp;&amp; std::move&lt;std::pair&lt;std::__detail::_Node_iterator&lt;std::pair&lt;std::__cxx11::basic_string&lt;char, std::char_traits&lt;char&gt;, std::allocator&lt;char&gt; &gt; const, WeatherStation&gt;, false, true&gt;, bool&gt;&amp;&gt; (2,992,507,639 samples, 0.26%)</title><rect x="1135.2" y="229" width="3.1" height="15.0" fill="rgb(207,13,3)" rx="2" ry="2" />
+<text  x="1138.17" y="239.5" ></text>
+</g>
+<g >
+<title>std::equal_to&lt;std::__cxx11::basic_string&lt;char, std::char_traits&lt;char&gt;, std::allocator&lt;char&gt; &gt; &gt;::operator (4,587,409,154 samples, 0.40%)</title><rect x="906.3" y="165" width="4.8" height="15.0" fill="rgb(245,188,45)" rx="2" ry="2" />
+<text  x="909.28" y="175.5" ></text>
+</g>
+<g >
+<title>std::__detail::_Hashtable_base&lt;std::__cxx11::basic_string&lt;char, std::char_traits&lt;char&gt;, std::allocator&lt;char&gt; &gt;, std::pair&lt;std::__cxx11::basic_string&lt;char, std::char_traits&lt;char&gt;, std::allocator&lt;char&gt; &gt; const, WeatherStation&gt;, std::__detail::_Select1st, std::equal_to&lt;std::__cxx11::basic_string&lt;char, std::char_traits&lt;char&gt;, std::allocator&lt;char&gt; &gt; &gt;, std::hash&lt;std::__cxx11::basic_string&lt;char, std::char_traits&lt;char&gt;, std::allocator&lt;char&gt; &gt; &gt;, std::__detail::_Mod_range_hashing, std::__detail::_Default_ranged_hash, std::__detail::_Hashtable_traits&lt;true, false, true&gt; &gt;::_M_equals (176,666,386,104 samples, 15.58%)</title><rect x="727.3" y="181" width="183.8" height="15.0" fill="rgb(212,34,8)" rx="2" ry="2" />
+<text  x="730.26" y="191.5" >std::__detail::_Hashtab..</text>
+</g>
+<g >
+<title>asm_sysvec_apic_timer_interrupt (108,128,685 samples, 0.01%)</title><rect x="903.3" y="149" width="0.1" height="15.0" fill="rgb(232,127,30)" rx="2" ry="2" />
+<text  x="906.30" y="159.5" ></text>
+</g>
+<g >
+<title>__hrtimer_run_queues (144,165,813 samples, 0.01%)</title><rect x="602.3" y="149" width="0.2" height="15.0" fill="rgb(237,150,35)" rx="2" ry="2" />
+<text  x="605.33" y="159.5" ></text>
+</g>
+<g >
+<title>std::__invoke_result&lt;main::{lambda (1,133,082,834,524 samples, 99.90%)</title><rect x="11.2" y="293" width="1178.8" height="15.0" fill="rgb(253,222,53)" rx="2" ry="2" />
+<text  x="14.23" y="303.5" >std::__invoke_result&lt;main::{lambda</text>
+</g>
+<g >
+<title>std::__detail::_Node_iterator&lt;std::pair&lt;std::__cxx11::basic_string&lt;char, std::char_traits&lt;char&gt;, std::allocator&lt;char&gt; &gt; const, WeatherStation&gt;, false, true&gt;&amp;&amp; std::__pair_get&lt;0ul&gt;::__move_get&lt;std::__detail::_Node_iterator&lt;std::pair&lt;std::__cxx11::basic_string&lt;char, std::char_traits&lt;char&gt;, std::allocator&lt;char&gt; &gt; const, WeatherStation&gt;, false, true&gt;, bool&gt; (2,708,034,091 samples, 0.24%)</title><rect x="471.8" y="245" width="2.8" height="15.0" fill="rgb(215,48,11)" rx="2" ry="2" />
+<text  x="474.79" y="255.5" ></text>
+</g>
+<g >
+<title>all (1,134,268,157,102 samples, 100%)</title><rect x="10.0" y="421" width="1180.0" height="15.0" fill="rgb(213,39,9)" rx="2" ry="2" />
+<text  x="13.00" y="431.5" ></text>
+</g>
+<g >
+<title>_start (1,128,734,846 samples, 0.10%)</title><rect x="10.1" y="389" width="1.1" height="15.0" fill="rgb(245,185,44)" rx="2" ry="2" />
+<text  x="13.06" y="399.5" ></text>
+</g>
+<g >
+<title>std::__detail::_Insert_base&lt;std::__cxx11::basic_string&lt;char, std::char_traits&lt;char&gt;, std::allocator&lt;char&gt; &gt;, std::pair&lt;std::__cxx11::basic_string&lt;char, std::char_traits&lt;char&gt;, std::allocator&lt;char&gt; &gt; const, WeatherStation&gt;, std::allocator&lt;std::pair&lt;std::__cxx11::basic_string&lt;char, std::char_traits&lt;char&gt;, std::allocator&lt;char&gt; &gt; const, WeatherStation&gt; &gt;, std::__detail::_Select1st, std::equal_to&lt;std::__cxx11::basic_string&lt;char, std::char_traits&lt;char&gt;, std::allocator&lt;char&gt; &gt; &gt;, std::hash&lt;std::__cxx11::basic_string&lt;char, std::char_traits&lt;char&gt;, std::allocator&lt;char&gt; &gt; &gt;, std::__detail::_Mod_range_hashing, std::__detail::_Default_ranged_hash, std::__detail::_Prime_rehash_policy, std::__detail::_Hashtable_traits&lt;true, false, true&gt; &gt;::_M_conjure_hashtable (4,003,467,437 samples, 0.35%)</title><rect x="1020.4" y="213" width="4.1" height="15.0" fill="rgb(231,121,29)" rx="2" ry="2" />
+<text  x="1023.37" y="223.5" ></text>
+</g>
+<g >
+<title>int const&amp; std::max&lt;int&gt; (2,900,276,458 samples, 0.26%)</title><rect x="11.4" y="261" width="3.0" height="15.0" fill="rgb(237,148,35)" rx="2" ry="2" />
+<text  x="14.42" y="271.5" ></text>
+</g>
+<g >
+<title>error_entry (108,166,964 samples, 0.01%)</title><rect x="340.1" y="245" width="0.1" height="15.0" fill="rgb(240,163,39)" rx="2" ry="2" />
+<text  x="343.06" y="255.5" ></text>
+</g>
+<g >
+<title>x64_sys_call (1,126,028,834 samples, 0.10%)</title><rect x="10.1" y="293" width="1.1" height="15.0" fill="rgb(247,194,46)" rx="2" ry="2" />
+<text  x="13.06" y="303.5" ></text>
+</g>
+<g >
+<title>vms_clear_ptes (1,126,028,834 samples, 0.10%)</title><rect x="10.1" y="197" width="1.1" height="15.0" fill="rgb(206,4,1)" rx="2" ry="2" />
+<text  x="13.06" y="207.5" ></text>
+</g>
+<g >
+<title>__mod_memcg_lruvec_state (169,259,430 samples, 0.01%)</title><rect x="10.9" y="37" width="0.2" height="15.0" fill="rgb(247,195,46)" rx="2" ry="2" />
+<text  x="13.89" y="47.5" ></text>
+</g>
+<g >
+<title>update_process_times (576,745,874 samples, 0.05%)</title><rect x="335.6" y="149" width="0.6" height="15.0" fill="rgb(250,209,50)" rx="2" ry="2" />
+<text  x="338.57" y="159.5" ></text>
+</g>
+<g >
+<title>do_vmi_align_munmap (1,126,028,834 samples, 0.10%)</title><rect x="10.1" y="229" width="1.1" height="15.0" fill="rgb(211,29,7)" rx="2" ry="2" />
+<text  x="13.06" y="239.5" ></text>
+</g>
+<g >
+<title>operator new (1,152,641,676 samples, 0.10%)</title><rect x="459.4" y="213" width="1.2" height="15.0" fill="rgb(216,51,12)" rx="2" ry="2" />
+<text  x="462.41" y="223.5" ></text>
+</g>
+<g >
+<title>std::__cxx11::basic_string&lt;char, std::char_traits&lt;char&gt;, std::allocator&lt;char&gt; &gt;::_S_copy_chars (4,600,659,206 samples, 0.41%)</title><rect x="417.3" y="229" width="4.8" height="15.0" fill="rgb(223,85,20)" rx="2" ry="2" />
+<text  x="420.30" y="239.5" ></text>
+</g>
+<g >
+<title>start_thread (1,133,082,834,524 samples, 99.90%)</title><rect x="11.2" y="373" width="1178.8" height="15.0" fill="rgb(212,34,8)" rx="2" ry="2" />
+<text  x="14.23" y="383.5" >start_thread</text>
+</g>
+<g >
+<title>mmap-multi3 (1,134,268,157,102 samples, 100.00%)</title><rect x="10.0" y="405" width="1180.0" height="15.0" fill="rgb(249,206,49)" rx="2" ry="2" />
+<text  x="13.00" y="415.5" >mmap-multi3</text>
+</g>
+<g >
+<title>void std::__invoke_impl&lt;void, main::{lambda (1,133,082,834,524 samples, 99.90%)</title><rect x="11.2" y="277" width="1178.8" height="15.0" fill="rgb(229,112,26)" rx="2" ry="2" />
+<text  x="14.23" y="287.5" >void std::__invoke_impl&lt;void, main::{lambda</text>
+</g>
+<g >
+<title>bool std::operator==&lt;char, std::char_traits&lt;char&gt;, std::allocator&lt;char&gt; &gt; (47,932,637,234 samples, 4.23%)</title><rect x="811.8" y="133" width="49.8" height="15.0" fill="rgb(227,102,24)" rx="2" ry="2" />
+<text  x="814.77" y="143.5" >bool ..</text>
+</g>
+<g >
+<title>int const&amp; std::max&lt;int&gt; (6,714,011,064 samples, 0.59%)</title><rect x="340.2" y="245" width="7.0" height="15.0" fill="rgb(237,148,35)" rx="2" ry="2" />
+<text  x="343.19" y="255.5" ></text>
+</g>
+<g >
+<title>update_load_avg (180,205,989 samples, 0.02%)</title><rect x="335.9" y="101" width="0.2" height="15.0" fill="rgb(240,165,39)" rx="2" ry="2" />
+<text  x="338.93" y="111.5" ></text>
+</g>
+<g >
+<title>void std::thread::_Invoker&lt;std::tuple&lt;main::{lambda (1,133,082,834,524 samples, 99.90%)</title><rect x="11.2" y="309" width="1178.8" height="15.0" fill="rgb(239,157,37)" rx="2" ry="2" />
+<text  x="14.23" y="319.5" >void std::thread::_Invoker&lt;std::tuple&lt;main::{lambda</text>
+</g>
+<g >
+<title>std::__detail::_Node_iterator&lt;std::pair&lt;std::__cxx11::basic_string&lt;char, std::char_traits&lt;char&gt;, std::allocator&lt;char&gt; &gt; const, WeatherStation&gt;, false, true&gt;::_Node_iterator (5,304,697,423 samples, 0.47%)</title><rect x="556.1" y="229" width="5.5" height="15.0" fill="rgb(221,74,17)" rx="2" ry="2" />
+<text  x="559.07" y="239.5" ></text>
+</g>
+<g >
+<title>std::__cxx11::basic_string&lt;char, std::char_traits&lt;char&gt;, std::allocator&lt;char&gt; &gt;::_Alloc_hider::_Alloc_hider (3,604,031,752 samples, 0.32%)</title><rect x="353.1" y="245" width="3.7" height="15.0" fill="rgb(212,32,7)" rx="2" ry="2" />
+<text  x="356.06" y="255.5" ></text>
+</g>
+<g >
+<title>std::__new_allocator&lt;char&gt;::~__new_allocator (2,071,422,525 samples, 0.18%)</title><rect x="523.4" y="245" width="2.2" height="15.0" fill="rgb(238,154,36)" rx="2" ry="2" />
+<text  x="526.44" y="255.5" ></text>
+</g>
+<g >
+<title>std::__detail::_Node_iterator_base&lt;std::pair&lt;std::__cxx11::basic_string&lt;char, std::char_traits&lt;char&gt;, std::allocator&lt;char&gt; &gt; const, WeatherStation&gt;, true&gt;::_Node_iterator_base (9,445,104,240 samples, 0.83%)</title><rect x="1036.7" y="197" width="9.8" height="15.0" fill="rgb(253,221,53)" rx="2" ry="2" />
+<text  x="1039.65" y="207.5" ></text>
+</g>
+<g >
+<title>zap_pmd_range.isra.0 (1,126,028,834 samples, 0.10%)</title><rect x="10.1" y="117" width="1.1" height="15.0" fill="rgb(244,180,43)" rx="2" ry="2" />
+<text  x="13.06" y="127.5" ></text>
+</g>
+<g >
+<title>std::__detail::_Hashtable_ebo_helper&lt;1, std::hash&lt;std::__cxx11::basic_string&lt;char, std::char_traits&lt;char&gt;, std::allocator&lt;char&gt; &gt; &gt;, true&gt;::_M_cget (342,396,560 samples, 0.03%)</title><rect x="971.1" y="197" width="0.4" height="15.0" fill="rgb(214,41,9)" rx="2" ry="2" />
+<text  x="974.09" y="207.5" ></text>
+</g>
+<g >
+<title>std::__str_hash_base&lt;char, std::allocator&lt;char&gt;, std::__cxx11::basic_string&lt;char, std::char_traits&lt;char&gt;, std::allocator&lt;char&gt; &gt; &gt;::operator (47,027,566,899 samples, 4.15%)</title><rect x="971.5" y="197" width="48.9" height="15.0" fill="rgb(222,81,19)" rx="2" ry="2" />
+<text  x="974.45" y="207.5" >std:..</text>
+</g>
+<g >
+<title>asm_sysvec_apic_timer_interrupt (99,675,824 samples, 0.01%)</title><rect x="788.4" y="149" width="0.1" height="15.0" fill="rgb(232,127,30)" rx="2" ry="2" />
+<text  x="791.37" y="159.5" ></text>
+</g>
+<g >
+<title>std::tuple_element&lt;0ul, std::pair&lt;std::__detail::_Node_iterator&lt;std::pair&lt;std::__cxx11::basic_string&lt;char, std::char_traits&lt;char&gt;, std::allocator&lt;char&gt; &gt; const, WeatherStation&gt;, false, true&gt;, bool&gt; &gt;::type&amp;&amp; std::get&lt;0ul, std::__detail::_Node_iterator&lt;std::pair&lt;std::__cxx11::basic_string&lt;char, std::char_traits&lt;char&gt;, std::allocator&lt;char&gt; &gt; const, WeatherStation&gt;, false, true&gt;, bool&gt; (4,094,082,379 samples, 0.36%)</title><rect x="1183.1" y="261" width="4.2" height="15.0" fill="rgb(211,27,6)" rx="2" ry="2" />
+<text  x="1186.06" y="271.5" ></text>
+</g>
+<g >
+<title>std::unordered_map&lt;std::__cxx11::basic_string&lt;char, std::char_traits&lt;char&gt;, std::allocator&lt;char&gt; &gt;, WeatherStation, std::hash&lt;std::__cxx11::basic_string&lt;char, std::char_traits&lt;char&gt;, std::allocator&lt;char&gt; &gt; &gt;, std::equal_to&lt;std::__cxx11::basic_string&lt;char, std::char_traits&lt;char&gt;, std::allocator&lt;char&gt; &gt; &gt;, std::allocator&lt;std::pair&lt;std::__cxx11::basic_string&lt;char, std::char_traits&lt;char&gt;, std::allocator&lt;char&gt; &gt; const, WeatherStation&gt; &gt; &gt;::cend (30,377,986,080 samples, 2.68%)</title><rect x="1081.5" y="229" width="31.6" height="15.0" fill="rgb(215,47,11)" rx="2" ry="2" />
+<text  x="1084.53" y="239.5" >st..</text>
+</g>
+<g >
+<title>__vm_munmap (1,126,028,834 samples, 0.10%)</title><rect x="10.1" y="261" width="1.1" height="15.0" fill="rgb(231,121,28)" rx="2" ry="2" />
+<text  x="13.06" y="271.5" ></text>
+</g>
+<g >
+<title>std::__cxx11::basic_string&lt;char, std::char_traits&lt;char&gt;, std::allocator&lt;char&gt; &gt;::_M_capacity (108,155,551 samples, 0.01%)</title><rect x="398.2" y="229" width="0.2" height="15.0" fill="rgb(239,160,38)" rx="2" ry="2" />
+<text  x="401.25" y="239.5" ></text>
+</g>
+<g >
+<title>std::__cxx11::basic_string&lt;char, std::char_traits&lt;char&gt;, std::allocator&lt;char&gt; &gt;::_M_construct&lt;char const*&gt; (6,805,426,990 samples, 0.60%)</title><rect x="398.4" y="229" width="7.0" height="15.0" fill="rgb(214,43,10)" rx="2" ry="2" />
+<text  x="401.36" y="239.5" ></text>
+</g>
+</g>
+</svg>
