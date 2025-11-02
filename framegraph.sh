@@ -1,5 +1,11 @@
 #!/bin/bash
 
+# 如果提示没有权限
+# 方案1 sudo 执行本脚本
+# 方案2 永久修改配置
+# sudo echo "kernel.perf_event_paranoid = -1" >> /etc/sysctl.conf
+
+
 # 确保脚本在当前工作目录执行
 WORK_DIR=$(pwd)
 FLAMEGRAPH_DIR="$WORK_DIR/FlameGraph"

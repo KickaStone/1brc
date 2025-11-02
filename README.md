@@ -163,3 +163,12 @@ st.minTemp = std::min(st.minTemp, t);
 
 虽然string可以通过定长数组存储，但这里为了避免复制，直接使用指针存比较好。这样数组的元素是`[const char*, uint8_t len, double]`的三元组形式，单元素大小4+1+4=9B 最好放一个struct，对齐到16B.
 
+## 实现哈希表
+
+这里使用自定义哈希表看看能不能进一步提高速度，之所以要自己实现，因为c++ stl 的unordered_map有很多不好的地方，为了通用性有性能上的妥协。模板或接口设计为通用型，类型擦除、多层 indirection；每个桶或节点都需要堆分配；多层间接寻址导致 cache miss等。
+
+这里使用开放定址法实现哈希表，底层用一个大数组解决，主要优点在于实现简单，内存连续性比较好，cache命中率高。
+
+实现在[这里](./test/hashtable/myhashtable.h),把原先的unordered_map简单替换后得到[mmap-hashtable.cpp](./mmap-hashtable.cpp)，经过测试性能提高到12s左右，属于比较好的进步了。
+
+![](./img/mmap-hashtable.svg) 

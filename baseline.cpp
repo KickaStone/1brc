@@ -47,7 +47,7 @@ void format_output(const DB &db){
     sort(names.begin(), names.end());
     for(string &x : names){
         auto r = db.at(x);
-        printf("%s=%.1f/%.1f/%.1f, ", x.c_str(), r.min, r.max, r.sum/r.cnt);
+        printf("%s=%.1f/%.1f/%.1f, ", x.c_str(), r.min, r.sum/r.cnt, r.max);
     }
 }
 
