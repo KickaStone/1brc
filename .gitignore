@@ -5,6 +5,7 @@
 /FlameGraph
 /1brc
 /output
+/bug
 
 .gdb_history
 perf*
