@@ -32,7 +32,6 @@ inline int parse(char *data, int &len, int &v)
     int idx = 0;
     // 解析名称
     while (data[idx++] != ';') len++;
-    idx++;
 
     // 解析温度值
     while (data[idx] != '\n' && data[idx] != '\0')
