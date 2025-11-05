@@ -18,7 +18,7 @@ mkdir -p "$OUTPUT_DIR"
 # -g: 生成调用图（call graph）
 # -F: 设置采样频率，单位是赫兹，默认值通常是 99，增大取样会消耗更多资源
 # -o: 指定输出文件
-perf record -F 199 -g -- "./$1" "$2"
+perf record -F 199 -g  -- "./$1" "$2"
 
 # 将性能数据导出为一个可用于生成火焰图的格式
 # perf script: 生成perf数据的可读格式

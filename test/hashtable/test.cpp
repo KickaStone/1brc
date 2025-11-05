@@ -4,7 +4,7 @@
 using namespace std;
 int main(int argc, char const *argv[])
 {
-    HashTable<int> ht(10000);
+    HashTable2<int> ht(10000);
 
     auto it = ht.try_emplace("hello", 5);
     if(it != nullptr){

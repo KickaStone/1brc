@@ -1,5 +1,10 @@
+ifndef NTHREADS
+NTHREADS=$(shell nproc --all 2>/dev/null || sysctl -n hw.logicalcpu)
+endif
+
 CXX=g++
-CXXFLAGS=-std=c++17 -Wall -Wextra -Werror -g0
+CXXFLAGS=-std=c++17 -O3 -Wall -Wextra -Werror -g0 -fomit-frame-pointer -m64 -march=native -mtune=native -flto
+CXXFLAGS+=-DNTHREADS=$(NTHREADS)
 INCLUDES=-Itest/hashtable
 OUTDIR=bin
 

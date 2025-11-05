@@ -24,6 +24,20 @@ struct WeatherStation
     int maxTemp = numeric_limits<int>::min();
     int minTemp = numeric_limits<int>::max();
 };
+// parse lookup table
+int parseTB[256][2];
+
+void init() {
+    for (int i = 0; i < 256; i++) {
+        if (i >= '0' && i <= '9') {
+            parseTB[i][0] = i - '0';
+            parseTB[i][1] = 10;
+        }else {
+            parseTB[i][0] = 0;
+            parseTB[i][1] = 1;
+        }
+    }
+}
 
 inline int parse(char *data, int &len, int &v)
 {
@@ -34,25 +48,20 @@ inline int parse(char *data, int &len, int &v)
     // 解析名称
     while (data[idx++] != ';') len++;
 
+    if (data[idx] == '-') {
+        neg = -1;
+        idx++;
+    }
+
     // 解析温度值
-    while (data[idx] != '\n' && data[idx] != '\0')
+    while (data[idx] != '\n')
     {
-        if (data[idx] == '-')
-        {
-            neg = -1;
-            idx++;
-            continue;
-        }
-        if (data[idx] == '.')
-        {
-            idx++;
-            continue;
-        }
-        v = v * 10 + (data[idx] - '0');
+        v = (v + parseTB[(int)data[idx]][0]) * parseTB[(int)data[idx]][1];
         idx++;
     }
     v *= neg;
-    if (data[idx] == '\n') idx++;
+    v /= 10;
+    idx++; // 跳过 '\n'
     return idx;
 }
 
@@ -82,6 +91,7 @@ int main(int argc, char *argv[])
 
     size_t file_size = sb.st_size;
     char *mapped = (char *)mmap(nullptr, file_size, PROT_READ, MAP_PRIVATE, fd, 0);
+    madvise(mapped, file_size, MADV_WILLNEED);
     if (mapped == MAP_FAILED)
     {
         cout << "Error mapping file" << endl;
@@ -89,13 +99,14 @@ int main(int argc, char *argv[])
         return 1;
     }
 
+    init();
     vector<HashTable<WeatherStation>> v;
     v.reserve(NTHREADS);
     for (int i = 0; i < NTHREADS; i++) {
         v.emplace_back(10000);
     }
-    vector<thread> threads;
 
+    vector<thread> threads;
     size_t left[NTHREADS], right[NTHREADS];
     double d = file_size * 1.0 / NTHREADS;
     for (int i = 0; i < NTHREADS; i++)

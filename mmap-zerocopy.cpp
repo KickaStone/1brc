@@ -8,10 +8,10 @@
 #include <vector>
 #include <algorithm>
 
-#include "myhashtable2.h"
+#include "myhashtable3.h"
 
 using namespace std;
-using namespace hash2;
+using namespace hash3;
 
 #ifndef NTHREADS
 #define NTHREADS 16
@@ -24,6 +24,20 @@ struct WeatherStation
     int maxTemp = numeric_limits<int>::min();
     int minTemp = numeric_limits<int>::max();
 };
+// parse lookup table
+int parseTB[256][2];
+
+void init() {
+    for (int i = 0; i < 256; i++) {
+        if (i >= '0' && i <= '9') {
+            parseTB[i][0] = i - '0';
+            parseTB[i][1] = 10;
+        }else {
+            parseTB[i][0] = 0;
+            parseTB[i][1] = 1;
+        }
+    }
+}
 
 inline int parse(char *data, int &len, int &v)
 {
@@ -34,25 +48,20 @@ inline int parse(char *data, int &len, int &v)
     // 解析名称
     while (data[idx++] != ';') len++;
 
+    if (data[idx] == '-') {
+        neg = -1;
+        idx++;
+    }
+
     // 解析温度值
-    while (data[idx] != '\n' && data[idx] != '\0')
+    while (data[idx] != '\n')
     {
-        if (data[idx] == '-')
-        {
-            neg = -1;
-            idx++;
-            continue;
-        }
-        if (data[idx] == '.')
-        {
-            idx++;
-            continue;
-        }
-        v = v * 10 + (data[idx] - '0');
+        v = (v + parseTB[(int)data[idx]][0]) * parseTB[(int)data[idx]][1];
         idx++;
     }
     v *= neg;
-    if (data[idx] == '\n') idx++;
+    v /= 10;
+    idx++; // 跳过 '\n'
     return idx;
 }
 
@@ -82,6 +91,7 @@ int main(int argc, char *argv[])
 
     size_t file_size = sb.st_size;
     char *mapped = (char *)mmap(nullptr, file_size, PROT_READ, MAP_PRIVATE, fd, 0);
+    madvise(mapped, file_size, MADV_WILLNEED);
     if (mapped == MAP_FAILED)
     {
         cout << "Error mapping file" << endl;
@@ -89,13 +99,14 @@ int main(int argc, char *argv[])
         return 1;
     }
 
+    init();
     vector<HashTable<WeatherStation>> v;
     v.reserve(NTHREADS);
     for (int i = 0; i < NTHREADS; i++) {
         v.emplace_back(10000);
     }
-    vector<thread> threads;
 
+    vector<thread> threads;
     size_t left[NTHREADS], right[NTHREADS];
     double d = file_size * 1.0 / NTHREADS;
     for (int i = 0; i < NTHREADS; i++)
@@ -136,8 +147,7 @@ int main(int argc, char *argv[])
 
     for (auto &t : threads)
         t.join();
-    munmap(mapped, file_size);
-    close(fd);
+
 
     HashTable<WeatherStation> records(10000);
     for (size_t k = 0; k < NTHREADS; k++)
@@ -159,30 +169,33 @@ int main(int argc, char *argv[])
             else
             {
                 throw std::runtime_error("Error");
-                printf("Error: %s insert failed, record:%p, ptr:%p\n", mp.keys[i].first, record, ptr);
             }
         }
     }
 
-    vector<char*> names(records.unique_cnt);
+    vector<string> names;
+    names.reserve(records.unique_cnt);
     for (size_t i = 0; i < records.unique_cnt; i++)
     {
-        names[i] = const_cast<char*>(records.keys[i].first);
+        names.emplace_back(records.keys[i].first, records.keys[i].second);
     }
-    sort(names.begin(), names.end(), [](auto &a, auto &b) { return strcmp(a, b) < 0; });
+    sort(names.begin(), names.end());
 
     for (auto &name : names)
     {
-        auto ptr = records.find(name, strlen(name));
+        auto ptr = records.find(name.c_str(), name.size());
         if (ptr != nullptr)
         {
-            printf("%s=%.1f/%.1f/%.1f, ", name, ptr->minTemp * 0.1, ptr->totalTemp * 0.1 / ptr->cnt, ptr->maxTemp * 0.1);
+            printf("%s=%.1f/%.1f/%.1f, ", name.c_str(), ptr->minTemp * 0.1, ptr->totalTemp * 0.1 / ptr->cnt, ptr->maxTemp * 0.1);
         }
         else
         {
-            printf("Error: %s not found\n", name);
+            printf("Error: %s not found\n", name.c_str());
         }
     }
     cout << endl;
+
+    munmap(mapped, file_size);
+    close(fd);
     return 0;
 }

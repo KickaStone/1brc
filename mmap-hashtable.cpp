@@ -13,6 +13,7 @@
 #include "myhashtable.h"
 
 using namespace std;
+using namespace hash1;
 
 #ifndef NTHREADS
 #define NTHREADS 16
