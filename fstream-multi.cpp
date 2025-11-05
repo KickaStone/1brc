@@ -9,7 +9,9 @@
 #include <set>
 #include <limits>
 
+#ifndef NTHREADS
 #define NTHREADS 16
+#endif
 #define NSTATIONS 1000
 
 using namespace std;

@@ -8,10 +8,11 @@
 #include <vector>
 #include <algorithm>
 
-#include "myhashtable3.h"
+#include "myhashtable4.h"
 
 using namespace std;
-using namespace hash3;
+using namespace hash4;
+
 
 #ifndef NTHREADS
 #define NTHREADS 16
@@ -24,6 +25,8 @@ struct WeatherStation
     int maxTemp = numeric_limits<int>::min();
     int minTemp = numeric_limits<int>::max();
 };
+
+using map = hash4::HashTable<WeatherStation>;
 // parse lookup table
 int parseTB[256][2];
 
@@ -100,10 +103,10 @@ int main(int argc, char *argv[])
     }
 
     init();
-    vector<HashTable<WeatherStation>> v;
+    vector<map> v;
     v.reserve(NTHREADS);
     for (int i = 0; i < NTHREADS; i++) {
-        v.emplace_back(10000);
+        v.emplace_back(10000, hash4::APHash);
     }
 
     vector<thread> threads;
@@ -149,7 +152,7 @@ int main(int argc, char *argv[])
         t.join();
 
 
-    HashTable<WeatherStation> records(10000);
+    HashTable<WeatherStation> records(10000, hash4::APHash);
     for (size_t k = 0; k < NTHREADS; k++)
     {
         auto &mp = v[k];
