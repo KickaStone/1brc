@@ -172,3 +172,23 @@ st.minTemp = std::min(st.minTemp, t);
 实现在[这里](./test/hashtable/myhashtable.h),把原先的unordered_map简单替换后得到[mmap-hashtable.cpp](./mmap-hashtable.cpp)，经过测试性能提高到12s左右，属于比较好的进步了。
 
 ![](./img/mmap-hashtable.svg) 
+
+## 最后的优化
+最后一步，让编译器为我们做优化。开启编译器选项：
+```
+-O3 -fomit-frame-pointer -m64 -march=native -mtune=native -flto
+```
+-O3：开启最高级别的优化，包含诸如循环展开、内联函数等高级优化手段，以提升程序运行速度，但可能会增加编译时间和代码体积。​
+
+-fomit-frame-pointer：让编译器省略帧指针寄存器的生成，在x86_64等平台常用于释放一个寄存器供优化使用，进一步提升性能，尤其适合release构建。​
+
+-m64：强制生成64位目标代码，使生成的程序在64位平台上运行，利用64位架构资源。​
+
+-march=native：根据当前本地CPU的具体架构，生成针对本机指令集优化的代码，最大限度利用硬件特性。​
+
+-mtune=native：优化生成的代码以适应当前CPU的运行特性，提高兼容性和性能，但不一定使用最新指令集，保证代码能在类似CPU上运行。​
+
+-flto：启用链接时优化（Link Time Optimization），在链接阶段统一优化所有目标文件，可以消除冗余代码、提升全局优化效果。
+
+
+最终时间3.32s, 编译器的优化还是很给力的。
